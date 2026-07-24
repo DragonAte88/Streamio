@@ -13,6 +13,19 @@ let mpv;
 let lastBounds = null;
 let closing = false;
 
+// Real evidence from a verbose mpv log: the GPU render pipeline runs
+// continuously and correctly (per-frame shader timing for the full session) -
+// decode/render was never the problem. The controls window's "transparent"
+// middle area is the actual suspect: Electron/DWM transparency is known to be
+// fragile on some Windows GPU/driver combos and can render as opaque black
+// instead of see-through, fully hiding the correctly-painting video beneath
+// it. setShape() sidesteps the question entirely by making the middle area
+// genuinely not part of the window at the OS level, not just visually
+// transparent - the video is guaranteed visible there regardless of whether
+// DWM composites transparency correctly on this machine.
+const TOP_BAR_HEIGHT = 76;
+const BOTTOM_BAR_HEIGHT = 94;
+
 const isDev = process.env.NODE_ENV === "development";
 
 function alive(win) {
@@ -100,6 +113,12 @@ function createControlsWindow() {
   });
   controlsWindow.setMenu(null);
   controlsWindow.setIgnoreMouseEvents(false);
+  // Forward this window's renderer console.log into our own stdout so click
+  // diagnostics show up in the same log stream as everything else, instead
+  // of being trapped in a devtools window nobody has open.
+  controlsWindow.webContents.on("console-message", (_e, level, message) => {
+    console.log("[controlsWindow console]", message);
+  });
   controlsWindow.loadFile(path.join(__dirname, "playerControls.html"));
 }
 
@@ -187,6 +206,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.on("player:back-requested", () => {
+    console.log("[main] player:back-requested received, forwarding to mainWindow");
     if (alive(mainWindow)) mainWindow.webContents.send("player:back");
   });
 });
@@ -207,6 +227,19 @@ function applyVideoBounds() {
 
       if (alive(controlsWindow)) {
         controlsWindow.setBounds(bounds);
+        try {
+          controlsWindow.setShape([
+            { x: 0, y: 0, width: bounds.width, height: Math.min(TOP_BAR_HEIGHT, bounds.height) },
+            {
+              x: 0,
+              y: Math.max(0, bounds.height - BOTTOM_BAR_HEIGHT),
+              width: bounds.width,
+              height: Math.min(BOTTOM_BAR_HEIGHT, bounds.height)
+            }
+          ]);
+        } catch (e) {
+          console.error("[applyVideoBounds] setShape failed:", e.message);
+        }
         if (!controlsWindow.isVisible()) controlsWindow.showInactive();
         controlsWindow.moveTop(); // keep controls above the mpv window
       }

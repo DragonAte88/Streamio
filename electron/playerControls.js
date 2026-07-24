@@ -53,7 +53,10 @@ window.player.onExit(() => {
   centerMsg.style.display = "flex";
 });
 
-backBtn.addEventListener("click", () => window.playerControlsBridge.requestBack());
+backBtn.addEventListener("click", () => {
+  console.log("[playerControls] back button clicked, sending request");
+  window.playerControlsBridge.requestBack();
+});
 
 playPause.addEventListener("click", () => {
   if (paused) window.player.play();
