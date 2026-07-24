@@ -35,9 +35,15 @@
   "build": {
     "appId": "com.dragonate88.streamio",
     "productName": "Streamio",
-    "files": ["dist/**", "electron/**", "package.json"],
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "signAndEditExecutable": false,
+      "forceCodeSigning": false
     },
     "nsis": {
       "artifactName": "Streamio-Setup-${version}.exe",
