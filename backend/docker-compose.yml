@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: streamio
+      POSTGRES_PASSWORD: ${PGPASSWORD}
+      POSTGRES_DB: streamio
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [internal]
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    depends_on: [postgres]
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: streamio
+      PGPASSWORD: ${PGPASSWORD}
+      PGDATABASE: streamio
+      JWT_SECRET: ${JWT_SECRET}
+      PORT: 4000
+    ports:
+      - "10.0.0.166:4000:4000"
+    networks: [internal]
+
+networks:
+  internal:
+
+volumes:
+  pgdata:
