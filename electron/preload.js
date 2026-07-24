@@ -20,3 +20,8 @@ contextBridge.exposeInMainWorld("player", {
     return () => ipcRenderer.removeListener("player:mpv-exit", listener);
   }
 });
+
+contextBridge.exposeInMainWorld("discord", {
+  setWatching: (channelName) => ipcRenderer.invoke("discord:watching", channelName),
+  clear: () => ipcRenderer.invoke("discord:clear")
+});

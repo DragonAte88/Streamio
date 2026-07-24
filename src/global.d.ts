@@ -14,5 +14,9 @@ declare global {
       onPropertyChange: (cb: (msg: any) => void) => () => void;
       onExit: (cb: (msg: any) => void) => () => void;
     };
+    discord: {
+      setWatching: (channelName: string) => Promise<void>;
+      clear: () => Promise<void>;
+    };
   }
 }

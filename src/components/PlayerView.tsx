@@ -37,6 +37,7 @@ export default function PlayerView({ channel, onClose }: { channel: Channel; onC
         offExit = window.player.onExit(() => setError("Playback engine exited unexpectedly."));
         await window.player.load(channel.url);
         setReady(true);
+        window.discord.setWatching(channel.name);
       } catch (e: any) {
         setError(e?.message || String(e));
       }
@@ -48,6 +49,7 @@ export default function PlayerView({ channel, onClose }: { channel: Channel; onC
       if (offExit) offExit();
       window.player.stop();
       window.player.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false });
+      window.discord.clear();
     };
   }, [channel.url]);
 

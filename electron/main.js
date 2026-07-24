@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 const { MpvController } = require("./mpvController");
+const discordRpc = require("./discordRpc");
 
 let mainWindow;
 let videoWindow;
@@ -56,6 +57,14 @@ function createVideoWindow() {
 app.whenReady().then(() => {
   createMainWindow();
   createVideoWindow();
+  discordRpc.init();
+
+  ipcMain.handle("discord:watching", (_e, channelName) => {
+    discordRpc.setWatching(channelName);
+  });
+  ipcMain.handle("discord:clear", () => {
+    discordRpc.clear();
+  });
 
   ipcMain.handle("player:start", async () => {
     if (mpv) mpv.stop();
