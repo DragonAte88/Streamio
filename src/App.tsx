@@ -11,6 +11,7 @@ import Register from "./pages/Register";
 import Home from "./pages/Home";
 import LiveTV from "./pages/LiveTV";
 import Search from "./pages/Search";
+import Library from "./pages/Library";
 import MyList from "./pages/MyList";
 import Playlists from "./pages/Playlists";
 import PlaylistAdd from "./pages/PlaylistAdd";
@@ -28,7 +29,8 @@ import Notifications from "./pages/settings/Notifications";
 import Shortcuts from "./pages/settings/Shortcuts";
 import About from "./pages/settings/About";
 import Placeholder from "./pages/Placeholder";
-import { PLACEHOLDER_ROUTES } from "./lib/navConfig";
+import BrowsePlaceholder from "./pages/BrowsePlaceholder";
+import { BROWSE_PLACEHOLDERS, LIBRARY_PLACEHOLDERS, SETTINGS_PLACEHOLDERS } from "./lib/navConfig";
 
 export default function App() {
   return (
@@ -46,9 +48,24 @@ export default function App() {
                   <Route path="/home" element={<Home />} />
                   <Route path="/live-tv" element={<LiveTV />} />
                   <Route path="/search" element={<Search />} />
-                  <Route path="/my-list" element={<MyList />} />
-                  <Route path="/playlists" element={<Playlists />} />
-                  <Route path="/playlists/add" element={<PlaylistAdd />} />
+
+                  {BROWSE_PLACEHOLDERS.map((r) => (
+                    <Route key={r.path} path={r.path} element={<BrowsePlaceholder title={r.title} description={r.description} />} />
+                  ))}
+
+                  <Route path="/library" element={<Library />}>
+                    <Route index element={<Navigate to="my-list" replace />} />
+                    <Route path="my-list" element={<MyList />} />
+                    <Route path="playlists" element={<Playlists />} />
+                    <Route path="playlists/add" element={<PlaylistAdd />} />
+                    {LIBRARY_PLACEHOLDERS.map((r) => (
+                      <Route
+                        key={r.path}
+                        path={r.path.replace("/library/", "")}
+                        element={<Placeholder title={r.title} description={r.description} />}
+                      />
+                    ))}
+                  </Route>
 
                   <Route path="/settings" element={<Settings />}>
                     <Route index element={<Navigate to="general" replace />} />
@@ -64,11 +81,10 @@ export default function App() {
                     <Route path="notifications" element={<Notifications />} />
                     <Route path="shortcuts" element={<Shortcuts />} />
                     <Route path="about" element={<About />} />
+                    {SETTINGS_PLACEHOLDERS.map((r) => (
+                      <Route key={r.path} path={r.path} element={<Placeholder title={r.title} description={r.description} />} />
+                    ))}
                   </Route>
-
-                  {PLACEHOLDER_ROUTES.map((r) => (
-                    <Route key={r.path} path={r.path} element={<Placeholder title={r.title} description={r.description} />} />
-                  ))}
 
                   <Route path="*" element={<Navigate to="/home" replace />} />
                 </Route>

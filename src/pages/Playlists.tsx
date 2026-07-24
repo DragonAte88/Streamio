@@ -14,7 +14,7 @@ export default function Playlists() {
     <div className="playlist-list">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <h2 style={{ margin: 0 }}>Playlists</h2>
-        <Link to="/playlists/add" className="btn btn-primary">+ Add Playlist</Link>
+        <Link to="/library/playlists/add" className="btn btn-primary">+ Add Playlist</Link>
       </div>
 
       {sources.length === 0 && (

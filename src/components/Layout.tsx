@@ -1,9 +1,15 @@
 import React from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { NAV_GROUPS } from "../lib/navConfig";
 import { useAuth } from "../lib/auth";
 import { usePlayback } from "../lib/PlaybackContext";
 import PlayerView from "./PlayerView";
+
+const NAV = [
+  { path: "/home", label: "Home", icon: "🏠" },
+  { path: "/search", label: "Search", icon: "🔍" },
+  { path: "/library", label: "Your Library", icon: "📚" },
+  { path: "/settings/general", label: "Settings", icon: "⚙️" }
+];
 
 export default function Layout() {
   const nav = useNavigate();
@@ -13,27 +19,23 @@ export default function Layout() {
   return (
     <div className="top-shell">
       <div className="sidebar">
-        <div className="logo" onClick={() => nav("/home")} style={{ cursor: "pointer" }}>S</div>
+        <div className="logo" onClick={() => nav("/home")}>S</div>
         <nav>
-          <div className="nav-item" title="Home" onClick={() => nav("/home")}>⌂</div>
-          <div className="nav-item" title="Search" onClick={() => nav("/search")}>⌕</div>
-          <div className="nav-item" title="Account" onClick={() => nav(user ? "/settings/account" : "/login")}>
-            {user ? (user.display_name || user.email)[0].toUpperCase() : "◯"}
-          </div>
+          {NAV.map((item) => (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              className={({ isActive }) => "nav-item" + (isActive ? " active" : "")}
+            >
+              <span className="nav-item-icon">{item.icon}</span>
+              <span className="nav-item-label">{item.label}</span>
+            </NavLink>
+          ))}
         </nav>
-      </div>
-
-      <div className="side-panel">
-        {NAV_GROUPS.map((group) => (
-          <div key={group.label}>
-            <div className="nav-group-label">{group.label}</div>
-            {group.items.map((item) => (
-              <NavLink key={item.path} to={item.path} className={({ isActive }) => (isActive ? "active" : "")}>
-                {item.label}
-              </NavLink>
-            ))}
-          </div>
-        ))}
+        <div className="sidebar-account" onClick={() => nav(user ? "/settings/account" : "/login")}>
+          <div className="nav-item-icon avatar">{user ? (user.display_name || user.email)[0].toUpperCase() : "👤"}</div>
+          <span className="nav-item-label">{user ? user.display_name || user.email : "Sign In"}</span>
+        </div>
       </div>
 
       <div className="main-content">

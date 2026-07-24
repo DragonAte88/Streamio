@@ -48,7 +48,7 @@ export default function PlaylistAdd() {
         addedAt: Date.now()
       });
 
-      nav("/playlists");
+      nav("/library/playlists");
     } catch (err: any) {
       setError(err.message || "Import failed");
     } finally {
