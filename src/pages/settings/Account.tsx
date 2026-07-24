@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
-import { updateProfile, suspendMyAccount, wipeMyAccount } from "../../lib/api";
+import { updateProfile, suspendMyAccount, wipeMyAccount, fetchUserBadges } from "../../lib/api";
 import Toggle from "../../components/Toggle";
 import ProfileCard from "../../components/ProfileCard";
 
@@ -14,6 +14,11 @@ export default function Account() {
   const [saving, setSaving] = useState(false);
   const [wipeConfirm, setWipeConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const [badges, setBadges] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (token && user) fetchUserBadges(token, user.id).then(setBadges);
+  }, [token, user?.id]);
 
   if (!user || !token) {
     return (
@@ -57,7 +62,7 @@ export default function Account() {
     <div>
       <h2>Account</h2>
       <div style={{ display: "flex", gap: 24, marginBottom: 24 }}>
-        <ProfileCard user={{ ...user, bio }} />
+        <ProfileCard user={{ ...user, bio }} badges={badges} />
         <div style={{ flex: 1 }}>
           <div className="field">
             <label>Bio</label>

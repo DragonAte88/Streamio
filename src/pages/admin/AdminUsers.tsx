@@ -1,14 +1,32 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../../lib/auth";
-import { adminListUsers, adminSuspendUser, adminUnsuspendUser, adminDeleteUser, adminGrantUpload, adminRevokeUpload } from "../../lib/api";
+import {
+  adminListUsers,
+  adminSuspendUser,
+  adminUnsuspendUser,
+  adminDeleteUser,
+  adminGrantUpload,
+  adminRevokeUpload,
+  fetchUserBadges,
+  grantBadge,
+  revokeBadge
+} from "../../lib/api";
+import { BADGE_DEFINITIONS } from "../../lib/badges";
+import { BadgeRow } from "../../components/Badge";
 
 export default function AdminUsers() {
   const { token } = useAuth();
   const [users, setUsers] = useState<any[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [badgesByUser, setBadgesByUser] = useState<Record<number, string[]>>({});
+  const [badgeMenuFor, setBadgeMenuFor] = useState<number | null>(null);
 
   const load = () => {
-    if (token) adminListUsers(token).then(setUsers);
+    if (!token) return;
+    adminListUsers(token).then((list) => {
+      setUsers(list);
+      list.forEach((u: any) => fetchUserBadges(token, u.id).then((b) => setBadgesByUser((prev) => ({ ...prev, [u.id]: b }))));
+    });
   };
   useEffect(load, [token]);
 
@@ -18,16 +36,25 @@ export default function AdminUsers() {
     load();
   };
 
+  const toggleBadge = async (userId: number, slug: string) => {
+    if (!token) return;
+    const has = (badgesByUser[userId] || []).includes(slug);
+    if (has) await revokeBadge(token, userId, slug);
+    else await grantBadge(token, userId, slug);
+    fetchUserBadges(token, userId).then((b) => setBadgesByUser((prev) => ({ ...prev, [userId]: b })));
+  };
+
   return (
     <div className="playlist-list">
       <div className="row-title" style={{ fontSize: 15 }}>Users ({users.length})</div>
       {users.map((u) => (
-        <div className="playlist-item" key={u.id} style={{ alignItems: "flex-start" }}>
+        <div className="playlist-item" key={u.id} style={{ alignItems: "flex-start", position: "relative" }}>
           <div>
-            <div style={{ fontWeight: 600 }}>
+            <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
               {u.display_name || u.username || u.email}
               {u.username && <span style={{ opacity: 0.5 }}> #{u.discriminator}</span>}
-              {u.role === "admin" && <span style={{ marginLeft: 8, fontSize: 10, color: "var(--accent)" }}>ADMIN</span>}
+              {u.role === "admin" && <span style={{ fontSize: 10, color: "var(--accent)" }}>ADMIN</span>}
+              <BadgeRow slugs={badgesByUser[u.id] || []} size={16} />
             </div>
             <div className="playlist-meta">
               {u.email} · {u.suspended ? `Suspended (${u.suspended_reason})` : "Active"} ·{" "}
@@ -37,7 +64,23 @@ export default function AdminUsers() {
               ID: {u.internal_account_id}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", maxWidth: 320, justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", maxWidth: 400, justifyContent: "flex-end" }}>
+            <div style={{ position: "relative" }}>
+              <button className="btn btn-secondary" onClick={() => setBadgeMenuFor(badgeMenuFor === u.id ? null : u.id)}>
+                Badges
+              </button>
+              {badgeMenuFor === u.id && (
+                <div className="status-menu" style={{ bottom: "auto", top: "100%", right: 0, left: "auto", marginTop: 8, width: 220, maxHeight: 280, overflowY: "auto" }}>
+                  {BADGE_DEFINITIONS.map((b) => (
+                    <div key={b.slug} className="status-menu-item" onClick={() => toggleBadge(u.id, b.slug)}>
+                      <span>{b.icon}</span>
+                      {b.label}
+                      {(badgesByUser[u.id] || []).includes(b.slug) && <span style={{ marginLeft: "auto", color: "var(--accent)" }}>✓</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             {u.suspended ? (
               <button className="btn btn-secondary" onClick={() => act(adminUnsuspendUser, u.id)}>Unsuspend</button>
             ) : (

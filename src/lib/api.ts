@@ -225,6 +225,21 @@ export async function fetchAdminStats(token: string) {
   return res.json();
 }
 
+export async function fetchUserBadges(token: string, userId: number): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/badges/user/${userId}`, { headers: authHeaders(token) });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.badges.map((b: any) => b.badge_slug);
+}
+
+export async function grantBadge(token: string, userId: number, slug: string) {
+  await fetch(`${API_BASE}/badges/user/${userId}/${slug}`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function revokeBadge(token: string, userId: number, slug: string) {
+  await fetch(`${API_BASE}/badges/user/${userId}/${slug}`, { method: "DELETE", headers: authHeaders(token) });
+}
+
 export async function fetchAdminLogs(token: string) {
   const res = await fetch(`${API_BASE}/admin/logs`, { headers: authHeaders(token) });
   if (!res.ok) throw new Error(`logs fetch failed: ${res.status}`);

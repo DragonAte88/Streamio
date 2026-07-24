@@ -1,5 +1,6 @@
 import React from "react";
 import StatusDot from "./StatusDot";
+import { BadgeRow } from "./Badge";
 import { PresenceStatus } from "../lib/api";
 
 export interface ProfileCardData {
@@ -13,7 +14,7 @@ export interface ProfileCardData {
   status?: PresenceStatus | null;
 }
 
-export default function ProfileCard({ user }: { user: ProfileCardData }) {
+export default function ProfileCard({ user, badges = [] }: { user: ProfileCardData; badges?: string[] }) {
   const accent = user.accent_color || "#e6392f";
   return (
     <div style={{ width: 320, borderRadius: 12, overflow: "hidden", background: "var(--bg-card)", border: "1px solid #24242f" }}>
@@ -45,7 +46,10 @@ export default function ProfileCard({ user }: { user: ProfileCardData }) {
           </div>
         </div>
 
-        <div style={{ marginTop: 10, fontWeight: 700, fontSize: 16 }}>{user.display_name || user.username}</div>
+        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>{user.display_name || user.username}</span>
+          <BadgeRow slugs={badges} size={18} />
+        </div>
         <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 10 }}>
           {user.username}
           <span style={{ opacity: 0.6 }}>#{user.discriminator || "0000"}</span>

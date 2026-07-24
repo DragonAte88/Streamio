@@ -161,3 +161,15 @@ CREATE TABLE IF NOT EXISTS assets (
 
 -- Grants non-admin users permission to upload media assets
 ALTER TABLE users ADD COLUMN IF NOT EXISTS can_upload_assets BOOLEAN NOT NULL DEFAULT false;
+
+-- Profile badges: a fixed catalog (code defines the visuals/meaning) plus a
+-- join table of who has what. Kept data-only here - icon/gradient/glow are
+-- rendered client-side from BADGE_DEFINITIONS keyed by `slug`, so adding a
+-- new badge design never requires a migration, only a new catalog entry.
+CREATE TABLE IF NOT EXISTS user_badges (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  badge_slug TEXT NOT NULL,
+  granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  granted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  PRIMARY KEY (user_id, badge_slug)
+);

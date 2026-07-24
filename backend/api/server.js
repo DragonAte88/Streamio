@@ -27,6 +27,7 @@ app.use("/profile", require("./routes/profile"));
 app.use("/social", require("./routes/social"));
 app.use("/account", require("./routes/account"));
 app.use("/admin", require("./routes/admin"));
+app.use("/badges", require("./routes/badges"));
 app.use("/auth/discord", require("./routes/discord"));
 
 const { router: assetsRouter, UPLOAD_DIR } = require("./routes/assets");

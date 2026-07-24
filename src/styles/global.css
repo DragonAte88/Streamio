@@ -114,6 +114,24 @@ html, body, #root {
 .chat-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
 .typing-indicator { font-size: 11px; color: var(--text-dim); font-style: italic; padding: 4px 16px; }
 
+/* Badges */
+.badge-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  flex-shrink: 0;
+  cursor: default;
+  line-height: 1;
+}
+.badge-animated {
+  animation: badge-pulse 2.4s ease-in-out infinite;
+}
+@keyframes badge-pulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.35); }
+}
+
 /* Main content */
 .main-content { position: relative; overflow-y: auto; overflow-x: hidden; }
 .main-content::-webkit-scrollbar { width: 8px; }

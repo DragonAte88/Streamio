@@ -28,7 +28,13 @@ class MpvController {
       "--osd-level=0",
       "--keep-open=yes",
       "--hwdec=auto",
-      "--vo=gpu-next",
+      // gpu-next (libplacebo) can silently fail to paint into a --wid embedded
+      // window on some Windows GPU/driver combos - audio and time-pos keep
+      // advancing normally while the video surface just stays black. The
+      // classic gpu/d3d11 backend is the well-tested combination for --wid
+      // embedding on Windows.
+      "--vo=gpu",
+      "--gpu-context=d3d11",
       "--cache=yes",
       "--cache-secs=10",
       "--demuxer-max-bytes=50MiB",
@@ -36,7 +42,9 @@ class MpvController {
       "--user-agent=Mozilla/5.0 (StreamioDesktop)"
     ];
 
-    this.proc = spawn(MPV_PATH, args, { stdio: "ignore" });
+    this.proc = spawn(MPV_PATH, args, { stdio: ["ignore", "pipe", "pipe"] });
+    this.proc.stdout.on("data", (d) => console.log("[mpv]", d.toString().trim()));
+    this.proc.stderr.on("data", (d) => console.error("[mpv:err]", d.toString().trim()));
     this.proc.on("exit", (code) => {
       this._emit("mpv-exit", { code });
       this.proc = null;
