@@ -28,6 +28,7 @@ import DevDashboard from "./pages/admin/DevDashboard";
 import MyList from "./pages/MyList";
 import Playlists from "./pages/Playlists";
 import PlaylistAdd from "./pages/PlaylistAdd";
+import RecentlyWatched from "./pages/RecentlyWatched";
 import Settings from "./pages/Settings";
 import General from "./pages/settings/General";
 import Playback from "./pages/settings/Playback";
@@ -73,6 +74,7 @@ export default function App() {
                     <Route path="my-list" element={<MyList />} />
                     <Route path="playlists" element={<Playlists />} />
                     <Route path="playlists/add" element={<PlaylistAdd />} />
+                    <Route path="recently-watched" element={<RecentlyWatched />} />
                     {LIBRARY_PLACEHOLDERS.map((r) => (
                       <Route
                         key={r.path}

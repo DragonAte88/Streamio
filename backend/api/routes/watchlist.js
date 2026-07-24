@@ -28,6 +28,19 @@ router.delete("/:channelId", async (req, res) => {
   res.status(204).end();
 });
 
+router.get("/history", async (req, res) => {
+  const result = await pool.query(
+    `SELECT c.id, c.tvg_id, c.name, c.url, c.logo, c.group_name
+     FROM watch_history h JOIN channels c ON c.id = h.channel_id
+     WHERE h.user_id = $1
+     GROUP BY c.id, c.tvg_id, c.name, c.url, c.logo, c.group_name
+     ORDER BY MAX(h.watched_at) DESC
+     LIMIT 20`,
+    [req.user.sub]
+  );
+  res.json({ channels: result.rows });
+});
+
 router.post("/:channelId/history", async (req, res) => {
   await pool.query("INSERT INTO watch_history (user_id, channel_id) VALUES ($1,$2)", [req.user.sub, req.params.channelId]);
   res.status(204).end();

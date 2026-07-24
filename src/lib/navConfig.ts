@@ -64,7 +64,6 @@ export const BROWSE_PLACEHOLDERS: { path: string; title: string; description: st
 export const LIBRARY_PLACEHOLDERS: { path: string; title: string; description: string }[] = [
   { path: "/library/favorites", title: "Favorites", description: "Distinct from My List — quick-access starred channels." },
   { path: "/library/continue-watching", title: "Continue Watching", description: "Needs per-channel resume-position tracking, which doesn't exist yet — watch_history currently only logs event timestamps, not playback offsets." },
-  { path: "/library/recently-watched", title: "Recently Watched", description: "Backed by the watch_history table already recording plays server-side — needs a GET endpoint to list it." },
   { path: "/library/downloads", title: "Downloads", description: "Offline VOD downloads — not applicable to live channels, relevant once VOD exists." }
 ];
 

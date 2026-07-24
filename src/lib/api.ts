@@ -125,9 +125,21 @@ export async function addChannel(
 }
 
 export async function fetchWatchlist(token: string): Promise<ApiChannel[]> {
-  const res = await fetch(`${API_BASE}/watchlist`, { headers: authHeaders(token) });
-  if (!res.ok) throw new Error(`watchlist fetch failed: ${res.status}`);
-  return (await res.json()).channels;
+  const res = await fetch(`${API_BASE}/watchlist`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error("Failed to load watchlist");
+  const data = await res.json();
+  return data.channels;
+}
+
+export async function fetchWatchHistory(token: string): Promise<ApiChannel[]> {
+  const res = await fetch(`${API_BASE}/watchlist/history`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error("Failed to load recently watched history");
+  const data = await res.json();
+  return data.channels;
 }
 
 export async function addToWatchlist(token: string, channelId: string) {

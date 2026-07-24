@@ -1,296 +1,292 @@
-# Streamio — Full Project Documentation & AI Handoff Guide
+# Streamio — Full Project Documentation
 
-Last updated: 2026-07-24, version 0.5.4. This document exists so another AI (or a human)
-can pick up this project with zero prior context and be productive immediately.
+**Last updated:** 2026-07-24 · **Current version:** 0.5.9 · **Latest commit:** `b286f92`
+
+This document is the single source of truth for the state of the entire Streamio project: the desktop app, the backend, the three Oracle Cloud instances it runs on, and the Discord integration. It is meant to be complete enough that another engineer or another AI session can pick up the project cold.
 
 ---
 
-## 1. What this is
+## 1. What Streamio is
 
-Streamio is a native Windows desktop app (`Streamio.exe`, Electron + mpv) for IPTV/M3U8 live TV
-and VOD playback, with a full account system, social features (friends/rooms/chat/watch-together),
-an admin panel, media upload/management, Discord integration (Rich Presence + OAuth2 account
-linking), an in-app auto-updater, and a Developer Dashboard.
+A native Windows desktop IPTV/M3U8 media player built on **Electron + mpv**, with a social layer (friends, rooms, DMs, watch-together), account system, admin panel, Discord Rich Presence + OAuth2 login linking, a badge system, and a self-hosted auto-update pipeline via GitHub Releases.
 
-It replaced an earlier Roblox-based version of the same idea (`DOCUMENTATION.md` in this repo's
-git history / the original `Rokemon` folder covers that prior project) — Roblox's platform
-limitations (no live audio API, HTTP rate ceilings, no hardware video decode) made a from-scratch
-palette/RLE video codec necessary there. None of that applies here: mpv handles real HLS/M3U8
-decode, hardware acceleration, and audio/video sync natively.
+- Local source: `C:\Users\OMEN\Desktop\Rokemon\desktop-app`
+- Local test-install (what the shipped installer actually produces): `C:\Users\OMEN\Desktop\Streamio`
+- GitHub: [github.com/DragonAte88/Streamio](https://github.com/DragonAte88/Streamio) — public repo, no description set, default branch `main`, created 2026-07-24, ~778 KB, TypeScript primary language, no license file.
 
-## 2. Repository & release locations
+---
 
-- **Source**: https://github.com/DragonAte88/Streamio (public, `main` branch, no protection rules)
-- **Releases**: same repo's Releases tab. Each release has three assets:
-  - `Streamio-Setup-X.Y.Z.exe` — NSIS installer (~170MB, includes full Electron+Chromium runtime)
-  - `latest.yml` — electron-updater's manifest (version, sha512, size) — **required** for the
-    in-app auto-updater to detect new versions
-  - `Streamio-source-vX.Y.Z.zip` — full source snapshot via `git archive` (guarantees no secrets
-    leak, since `git archive` only includes tracked files, and secrets are gitignored/never
-    committed)
-- **Local dev path**: `C:\Users\OMEN\Desktop\Rokemon\desktop-app`
-- **Local test-install path**: `C:\Users\OMEN\Desktop\Streamio` — the user's actual install
-  location. **Always test against this exact path**, not just `dist/win-unpacked`, per explicit
-  user instruction. Rebuild and `robocopy /MIR` into this folder after every change (see §8).
+## 2. Desktop app architecture
 
-## 3. Architecture
+### 2.1 Three-window model (why it exists)
 
-### 3.1 Desktop app (Electron)
+Electron main process (`electron/main.js`) creates **three real OS-level windows**, not one window with CSS layers:
 
-Three real OS windows, not one:
+1. **`mainWindow`** — the React UI (1440×900, resizable, `dist/index.html` in prod / `http://localhost:5173` in dev).
+2. **`videoWindow`** — frameless, non-topmost, invisible-by-design; this is purely the native render target mpv attaches to via `--wid=<hwnd>`.
+3. **`controlsWindow`** — frameless, `transparent: true`, `setAlwaysOnTop(true, "screen-saver")`, region-restricted via `setShape()` to just a top bar (`TOP_BAR_HEIGHT = 76px`) and bottom bar (`BOTTOM_BAR_HEIGHT = 94px`); loads `electron/playerControls.html`.
 
-1. **`mainWindow`** — the actual React app (all UI except video/controls).
-2. **`videoWindow`** — a blank, frameless child window that exists *only* as mpv's `--wid` render
-   target. mpv paints directly into this native window; it has no web content of its own.
-3. **`controlsWindow`** — hosts the back button, title, seek bar, play/pause, volume. This is
-   **not** a DOM overlay in `mainWindow` — a native window like `videoWindow` always paints above
-   *all* content in its owner, so React-rendered controls could never appear "on top of" the
-   video regardless of CSS z-index. `controlsWindow` is a separate always-on-top window kept
-   positioned identically to `videoWindow` via `moveTop()`.
+**Why three windows and not a DOM overlay in `mainWindow`:** mpv's native `--wid`-embedded window always paints above *all* renderer content in its owning window, regardless of CSS `z-index`. A DOM overlay living in the same window as mpv can never visually sit "on top of" the video. The only way to layer UI over native video is a second, separate top-level window positioned above it in real OS z-order.
 
-**Critical detail (found the hard way, see §9.3)**: `controlsWindow` uses `setShape()` to restrict
-its actual visible/hit-testable region to just the top bar (76px) and bottom bar (94px) — the
-middle is genuinely excluded from the window at the OS level, not just CSS-transparent. This is
-because Windows/DWM transparency (`transparent: true` on a `BrowserWindow`) is fragile and was
-observed rendering as opaque black instead of see-through, fully hiding a *correctly-rendering*
-video underneath it.
+`applyVideoBounds()` in `main.js` keeps `videoWindow`/`controlsWindow` bounds synced to wherever the React `.player-view` div reports its bounds (via `ResizeObserver` + scroll listeners in `PlayerView.tsx`), translated into screen coordinates using `mainWindow.getContentBounds()`.
 
-Key files:
-- `electron/main.js` — window lifecycle, IPC handlers, bounds/shape sync
-- `electron/mpvController.js` — spawns mpv, JSON IPC over a named pipe (`streamio-mpvsocket`)
-- `electron/playerControls.html` / `playerControls.js` — vanilla JS/HTML for `controlsWindow`
-  (deliberately not React — it's a tiny, separate renderer)
-- `electron/preload.js` — contextBridge API surface (`window.player`, `window.discord`,
-  `window.updater`, `window.system`, `window.playerControlsBridge`), shared across all three
-  windows' preload scripts (same file loaded into each)
-- `electron/discordRpc.js` — Discord Rich Presence via `@xhayper/discord-rpc`, local IPC only
-- `electron/discordOAuth.js` — OAuth2 flow via system browser + a loopback HTTP listener on
-  `127.0.0.1:51823`
-- `electron/autoUpdater.js` — wraps `electron-updater`, 60s auto-check interval
-- `electron/systemStats.js` — local device stats (CPU/mem/disk/network/GPU) via `os` module +
-  PowerShell calls, for the Developer Dashboard
+### 2.2 Electron main-process files (`electron/`)
 
-### 3.2 Frontend (React + TypeScript + Vite, in `src/`)
+| File | Responsibility |
+|---|---|
+| `main.js` | Window lifecycle, IPC handlers, bounds/shape sync, close-crash guard |
+| `mpvController.js` | Spawns mpv, JSON IPC over a named pipe |
+| `preload.js` | `contextBridge` API surface exposed to renderers |
+| `playerControls.html` / `.js` | Vanilla HTML/JS UI for `controlsWindow` (back button, seek bar, play/pause, volume) |
+| `autoUpdater.js` | Wraps `electron-updater`, sanitizes error messages |
+| `discordRpc.js` | Discord Rich Presence via `@xhayper/discord-rpc` |
+| `discordOAuth.js` | Loopback-server OAuth2 code flow |
+| `systemStats.js` | CPU/disk/network/GPU stats for the Developer Dashboard |
 
-Router: `react-router-dom` (`HashRouter`). ~45 routes. Structure:
-- `App.tsx` — provider tree (Auth, Settings, Catalog, Playback) + route table
-- `components/Layout.tsx` — sidebar (Home/Search/Your Library/Social/Settings/Admin), status
-  selector, invite badge count
-- `components/PlayerView.tsx` — the *invisible* bounds-reporting div that tells Electron where to
-  position `videoWindow`/`controlsWindow`. Does **not** render its own controls (see §3.1).
-- `pages/` — one file per route; `pages/settings/*` (19 tabs), `pages/social/*`,
-  `pages/admin/*`
-- `lib/` — `api.ts` (all backend calls), `auth.tsx`, `SettingsContext.tsx`, `CatalogContext.tsx`,
-  `PlaybackContext.tsx`, `badges.ts` (badge catalog), `playlist.ts` (M3U parsing)
+`app.disableHardwareAcceleration()` is called at the top of `main.js` (added as an additional stability measure alongside the mpv-side `--hwdec-codecs=h264` restriction).
 
-### 3.3 Backend (Node/Express + Postgres, in `backend/`)
+**mpv launch flags** (`mpvController.js`), spawns `C:\Program Files\MPV Player\mpv.exe` (overridable via `MPV_PATH` env var):
+```
+--wid=<hwnd>
+--input-ipc-server=\\.\pipe\streamio-mpvsocket
+--idle=yes --force-window=yes --no-osc --no-input-default-bindings --osd-level=0 --keep-open=yes
+--hwdec=auto --hwdec-codecs=h264
+--vo=gpu --gpu-context=d3d11
+--log-file=<tmpdir>\streamio-mpv.log --msg-level=all=v,vo=trace,gpu=trace,cplayer=v
+--cache=yes --cache-secs=10 --demuxer-max-bytes=50MiB
+--network-timeout=15
+--user-agent=Mozilla/5.0 (StreamioDesktop)
+```
+IPC is JSON-over-named-pipe with request-id correlation, a 5s command timeout, and up to 40 connect retries at 100ms intervals.
 
-Deployed on Oracle Cloud, **not** bundled with the client. Runs on Flex-1 only (see §4).
+**IPC channels** (`preload.js` → `main.js`):
+- `window.player`: `start/load/play/pause/seek/setVolume/stop/setBounds/onPropertyChange/onExit/onBack`
+- `window.playerControlsBridge`: `requestBack/onMeta/onReady` (used only inside `controlsWindow`)
+- `window.discord`: `setWatching/clear/startOAuth/isConnected`
+- `window.system`: `getStats`
+- `window.updater`: `check/download/install/onStatus/onRestartCountdown`
 
-- `backend/api/server.js` — Express app, mounts all route files, runs `db/schema.sql` on every
-  boot (idempotent — every statement is `CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`)
-- `backend/api/routes/` — `auth.js`, `profile.js`, `social.js`, `account.js`, `admin.js`,
-  `assets.js`, `discord.js`, `badges.js`, `channels.js`, `watchlist.js`, `artwork.js`
-- `backend/api/db/schema.sql` — the entire schema, additive-only migrations (never destructive)
-- `backend/api/lib/logBuffer.js` — in-memory ring buffer capturing `console.log/error/warn`,
-  exposed via `/admin/logs` for the Developer Dashboard
-- `backend/docker-compose.yml` — Postgres + API containers
-- `backend/secrets.env` — **gitignored, never committed**. Contains `PGPASSWORD`, `JWT_SECRET`,
-  `TMDB_API_KEY`, `OMDB_API_KEY`, `FANART_API_KEY`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
-  `DISCORD_REDIRECT_URI`. Exists only on Flex-1 and locally at
-  `C:\Users\OMEN\Desktop\Rokemon\desktop-app\backend\secrets.env`. Sourced from
-  `C:\Users\OMEN\Desktop\KodiRoblox\FULL_PROJECT_DOCUMENTATION.md` (TMDB/OMDb/FanartTV/Discord
-  keys) — that file has its own "do not paste into chat" warning; never echo these values in
-  conversation, only pipe them directly file-to-file.
+### 2.3 Frontend (`src/`, React + TypeScript + Vite)
 
-## 4. Oracle Cloud infrastructure
+- `components/`: `Badge.tsx`, `ContentRow.tsx`, `FilterBar.tsx`, `HeroBanner.tsx`, `Layout.tsx`, `PersistenceHeartbeat.tsx`, `PlayerView.tsx`, `ProfileCard.tsx`, `SectionTabs.tsx`, `StatusDot.tsx`, `Toggle.tsx`
+- `lib/`: `api.ts`, `auth.tsx`, `badges.ts`, `CatalogContext.tsx`, `demoPlaylist.ts`, `navConfig.ts`, `PlaybackContext.tsx`, `playlist.ts`, `playlistSources.ts`, `settings.ts`, `SettingsContext.tsx`
+- `pages/`: `Admin.tsx`, `BrowsePlaceholder.tsx`, `Home.tsx`, `Library.tsx`, `LiveTV.tsx`, `Login.tsx`, `MyList.tsx`, `Placeholder.tsx`, `PlaylistAdd.tsx`, `Playlists.tsx`, `Register.tsx`, `Search.tsx`, `Settings.tsx`, `Setup.tsx`, `Social.tsx`
+- `pages/admin/`: `AdminAssets.tsx`, `AdminUsers.tsx`, `DevDashboard.tsx`
+- `pages/settings/`: `About.tsx`, `Account.tsx`, `Appearance.tsx`, `Audio.tsx`, `Backend.tsx`, `Discord.tsx`, `General.tsx`, `Notifications.tsx`, `Parental.tsx`, `Playback.tsx`, `Shortcuts.tsx`, `Subtitles.tsx`
+- `pages/social/`: `Friends.tsx`, `Invites.tsx`, `Requests.tsx`, `Roadmap.tsx`, `RoomDetail.tsx`, `Rooms.tsx`
 
-Full detail originally in `ORACLE_CLOUD_INFRASTRUCTURE.md` (project root, outside this repo).
-Summary:
+`PlaybackContext.tsx` holds the single global `playing: Channel | null` state; `PlayerView.tsx` is purely an invisible bounds-reporting `<div>` — it renders no UI of its own, all visible player chrome lives in `controlsWindow`.
 
-| Instance | Public IP | Role | SSH key |
-|---|---|---|---|
-| Flex-1 | `163.192.40.120` | **The only one actually running anything.** Postgres + API (Docker), Caddy (reverse proxy + HTTPS via sslip.io, terminates TLS at `163-192-40-120.sslip.io`) | `C:\Users\OMEN\.ssh\streamio_oracle_e5` |
-| Flex-2 | `170.9.15.10` | Idle. Has a dormant Discord voice-relay bot copied to `~/streamio-bot` but never activated | `C:\Users\OMEN\.ssh\streamio_oracle_flex2` |
-| Flex-3 | `138.2.232.225` | Blank/reserved. Was briefly used as a Caddy edge during initial setup, reverted — see §9.1 | `C:\Users\OMEN\.ssh\streamio_oracle_flex3` |
+**Badge catalog** (`src/lib/badges.ts`, 15 defined): `owner` 👑, `administrator` 🛡️, `developer` ⚙️, `moderator` 🔨, `support` 🧰, `qa_tester` 🧪, `beta_staff` 🚧, `premium` ⭐, `founder` 🚀, `supporter` ❤️, `early_adopter` 🎉, `veteran` 🔥, `verified` ✔, `streamer` 📺, `anime_fan` 🎌. Each has `slug/label/icon/gradient[2]/glow/animated?`. Purely data-driven in frontend code — the DB (`user_badges` table) only stores `(user_id, badge_slug)` pairs, so adding a new badge needs no migration.
 
-SSH: `ssh -i <key> ubuntu@<ip>`
+### 2.4 Dependencies (`package.json`, v0.5.9)
 
-**Why everything lives on Flex-1 alone**: Flex-1 and Flex-3 turned out to be in separate OCI VCNs
-(each auto-created its own on launch; they coincidentally share the `10.0.0.0/16` range, which
-looked like they might be peerable but weren't actually on the same network). Rather than set up
-real VCN peering for a single reverse-proxy hop, Caddy runs directly on Flex-1 itself.
+- **Runtime**: `@xhayper/discord-rpc ^1.3.4`, `electron-updater ^6.8.9`, `iptv-playlist-parser ^0.13.0`, `react-router-dom ^6.30.4`
+- **Dev**: `electron ^33.2.1`, `electron-builder ^25.1.8`, `react ^18.3.1`, `react-dom ^18.3.1`, `typescript ^5.7.2`, `vite ^6.0.7`, `@vitejs/plugin-react ^4.3.4`, `concurrently ^9.1.2`, `cross-env ^7.0.3`, `wait-on ^8.0.1`
+- **electron-builder config**: `appId: com.dragonate88.streamio`, `win.target: nsis`, unsigned (`forceCodeSigning: false`), `nsis.artifactName: Streamio-Setup-${version}.exe`, publish provider `github` → `DragonAte88/Streamio`
 
-Public API base: **`https://163-192-40-120.sslip.io`** (hardcoded as `API_BASE` in `src/lib/api.ts`
-and as `backendUrl` in Settings > Backend/Sync, user-editable there).
+### 2.5 Scripts
 
-### Deploying a backend change
+- `npm run dev` — concurrently runs Vite dev server + `electron .` in dev mode
+- `npm run build` — `vite build` only
+- `npm run dist` — `vite build && electron-builder --win` (full installer build)
+- `npm start` — production-mode `electron .` against the last `vite build` output
 
-```bash
-KEY1="/c/Users/OMEN/.ssh/streamio_oracle_e5"
-scp -i "$KEY1" backend/api/routes/whatever.js ubuntu@163.192.40.120:~/streamio-backend/api/routes/
-ssh -i "$KEY1" ubuntu@163.192.40.120 "cd ~/streamio-backend && docker compose --env-file secrets.env up -d --build"
-curl -s https://163-192-40-120.sslip.io/health  # {"ok":true,"db":"up"}
+---
+
+## 3. Backend (`backend/`)
+
+Node/Express + Postgres, deployed to Oracle Cloud **Flex-1** via Docker Compose.
+
+### 3.1 Layout
+
+```
+backend/
+  docker-compose.yml
+  secrets.env              (gitignored, not committed)
+  api/
+    Dockerfile
+    package.json
+    server.js
+    db/pool.js, schema.sql
+    lib/logBuffer.js
+    middleware/auth.js, roles.js
+    routes/account.js, admin.js, artwork.js, assets.js, auth.js,
+           badges.js, channels.js, discord.js, profile.js,
+           social.js, watchlist.js
 ```
 
-If `schema.sql` changed, scp it too (`backend/api/db/schema.sql` → `~/streamio-backend/api/db/schema.sql`)
-— it's re-applied automatically on container restart.
+`server.js`: `trust proxy = 1`, `cors()`, `express.json()`, runs `db/schema.sql` on **every boot** before listening (all statements are `CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` — additive-only, safe to re-run), listens on `0.0.0.0:${PORT || 4000}`.
 
-## 5. Database schema (high level)
+### 3.2 Database schema (`db/schema.sql`)
 
-All in `backend/api/db/schema.sql`. Tables:
-- `users` — email/password/display_name/**username+discriminator** (Discord-style unique handle,
-  auto-assigned at registration, immutable after), avatar/banner/accent_color/bio, onboarded,
-  **status** (online/idle/dnd/invisible/offline), **role** (user/admin), **can_upload_assets**,
-  suspended/suspended_reason, discord_* fields (OAuth tokens + linked identity),
-  privacy_show_activity/privacy_allow_friend_requests, **internal_account_id** (format
-  `############.#######`, 12 digits + literal `.#` + 6 digits — generated at registration,
-  **never included in any user-facing API response**, admin-only via `/admin/users`, exists
-  purely for account security/support lookup)
-- `channels` — the playable catalog (name/url/logo/group_name)
-- `watchlist`, `watch_history` — per-user
-- `friend_requests`, `friendships`, `direct_messages` — social graph
-- `rooms`, `room_members`, `room_messages`, `room_reads`, `dm_reads`, `room_invites` — watch
-  parties: text chat, read receipts, "invite a friend to watch" flow, owner-controlled
-  `active_channel_id` sync (clients poll, not websocket-pushed)
-- `assets` — uploaded media (mp4/mkv/mp3/images), `published_channel_id` links an asset to a
-  catalog `channels` row once an admin publishes it (that's the entire "custom video plays and
-  syncs in rooms" story — an upload becomes a normal channel, reusing every system already built,
-  not a separate pipeline)
-- `user_badges` — `(user_id, badge_slug)` pairs; the actual badge *definitions* (icon, gradient,
-  glow, animation) live in code at `src/lib/badges.ts`, not the DB — adding a new badge design
-  needs no migration
+- **`users`** — `id`, `email` (unique), `password_hash`, `display_name`, `created_at`, plus: `username`, `avatar_url`, `bio`, `onboarded`, `discord_user_id`, `discriminator` (unique `(username, discriminator)` — Discord-style `Name#0001` handle), `banner_url`, `accent_color` (default `#e6392f`), `privacy_show_activity`, `privacy_allow_friend_requests`, `status` (online/idle/dnd/invisible/offline), `last_active_at`, `role` (user/admin), `suspended`, `suspended_reason`, `discord_access_token`, `discord_refresh_token`, `discord_username`, `discord_avatar_url`, **`internal_account_id`** (unique, format `############.#######` — 12-digit + `.#` + 6-digit, admin-only exposure, security/identification purposes), `can_upload_assets`.
+- **`channels`** — `id`, `tvg_id`, `name`, `url`, `logo`, `group_name` (default `Uncategorized`), `created_at`.
+- **`watchlist`** — composite PK `(user_id, channel_id)`, cascade FKs.
+- **`watch_history`** — `id`, `user_id`, `channel_id`, `watched_at`.
+- **`friend_requests`** — `from_user_id`, `to_user_id`, `status` (pending/accepted/declined), unique pair.
+- **`friendships`** — composite PK `(user_a_id, user_b_id)`.
+- **`rooms`** — `id`, `name`, `owner_id`, `is_public`, `active_channel_id`, `discord_voice_channel_id`, `created_at`.
+- **`room_members`** — composite PK `(room_id, user_id)`.
+- **`room_messages`** — `id`, `room_id`, `user_id`, `body`, `sent_at`.
+- **`direct_messages`** — `id`, `from_user_id`, `to_user_id`, `body`, `sent_at`.
+- **`room_reads`** / **`dm_reads`** — read-receipt tracking tables, `last_read_message_id`.
+- **`room_invites`** — `id`, `room_id`, `from_user_id`, `to_user_id`, `status`.
+- **`assets`** — `id`, `uploader_id`, `filename`, `url`, `kind` (video/audio/image), `title`, `category`, `published_channel_id`, `created_at`.
+- **`user_badges`** — composite PK `(user_id, badge_slug)`, `granted_at`, `granted_by`.
 
-## 6. What's real vs. explicitly declined vs. not-yet-built
+### 3.3 API routes
 
-### Explicitly declined (do not build if asked again without new justification)
-- **YouTube stream extraction/re-hosting**: violates YouTube ToS (same category as a scraper).
-  The only legitimate option is embedding YouTube's official IFrame player (still "in-app" since
-  Electron is Chromium, just not literally browser-less).
-- **Discord voice relay into DM/Group DM calls**: Discord's API does not allow this for any
-  third-party app or bot — confirmed platform restriction, not a missing feature. A bot *can* join
-  a shared **guild (server) voice channel** — that code exists dormant on Flex-2 but isn't wired
-  up to anything.
-- **Bot editing a user's personal Discord presence while their client is closed**: not possible.
-  RPC requires a live local IPC connection to a running Discord client, full stop. A *bot account*
-  can have its own independent status, but that's the bot's profile, not the user's.
+| Mount | Auth | Notes |
+|---|---|---|
+| `GET /health` | none | `SELECT 1`, returns `{ok, db}` |
+| `/auth` | none | `POST /register` (bcrypt cost 12, auto-assigns discriminator + internal_account_id, 30d JWT), `POST /login` (423 + short-lived reactivate token if suspended) |
+| `/channels` | mixed | `GET /` public; `POST /` requires auth |
+| `/watchlist` | required | CRUD + history |
+| `/artwork` | none (needs `TMDB_API_KEY`) | TMDB search w/ word-truncation fallback → OMDb poster fallback, in-memory cache (no TTL) |
+| `/profile` | required | `GET/PATCH /me`, `POST /presence`, search, lookup |
+| `/social` | required | Largest route (327 lines): friends, DMs, rooms, watch-together sync, typing indicators (in-memory, 5s TTL, not persisted), room invites |
+| `/account` | mixed | self-suspend, reactivate (short-lived token only), permanent wipe (frees username+discriminator) |
+| `/admin` | admin only | `/stats`, `/logs` (2000-line ring buffer), user management, upload-permission grants |
+| `/badges` | mixed | read for self/others; grant/revoke admin-only |
+| `/auth/discord` | required | server-side OAuth code exchange, identity fetch, `/unlink` |
+| `/assets` | uploader-role only | multer disk storage, 4GB limit, `.mp4/.mkv/.mp3/.png/.jpg/.jpeg/.webp` |
+| `/uploads` | static | serves the upload directory |
 
-### Real and working (verified end-to-end against the live backend, not just type-checked)
-Filters (genre/A-Z/Z-A), identity/discriminator system, presence status, profile customization,
-account suspend/reactivate/permanent-wipe (with identifier recycling), admin panel (user
-management + asset upload/publish/delete), Discord OAuth2 (real Authorization Code flow, secret
-server-side only), read receipts, typing indicators, friend requests, rooms/chat/watch-together
-sync, invite-to-watch, badge system, Developer Dashboard (real live stats), auto-updater (checks
-real GitHub Releases, downloads, installs, verified restart flow).
+`middleware/auth.js` — JWT Bearer verification. `middleware/roles.js` — per-request `role`/`can_upload_assets` DB lookup for `requireAdmin`/`requireUploader`.
 
-### Roadmap (see in-app `/social/roadmap` for the full honest list)
-Real-time chat is polling-based (3s), not WebSocket. Guild-voice-channel bot relay exists as code
-but isn't activated. Room invites via shareable link, moderation tools, group DMs, and several
-other social features are documented as planned, not built.
+### 3.4 Docker Compose (`backend/docker-compose.yml`)
 
-## 7. Known platform gotchas (found the hard way — don't rediscover these)
+- `postgres` — `postgres:16-alpine`, volume `pgdata`, env `POSTGRES_USER/PASSWORD/DB=streamio`
+- `api` — built from `./api`, port **`127.0.0.1:4000:4000`** (loopback-only, not publicly exposed — Caddy fronts it), env: `PGHOST/PORT/USER/PASSWORD/DATABASE`, `JWT_SECRET`, `TMDB_API_KEY`, `OMDB_API_KEY`, `FANART_API_KEY`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_REDIRECT_URI`, `PORT=4000`, volume `uploads`
 
-1. **electron-builder + winCodeSign on Windows**: fails with `Cannot create symbolic link` unless
-   run as admin or Developer Mode is on (a system setting — do not enable it, that's a system
-   config change requiring explicit permission). Fix: `signAndEditExecutable: false` and
-   `forceCodeSigning: false` in `package.json`'s `build.win` config, plus
-   `CSC_IDENTITY_AUTO_DISCOVERY=false` env var when running `npm run dist`. This produces an
-   unsigned installer, which is fine for this project.
-2. **`.player-view` must be `position: fixed`, never `position: absolute`**, because it lives
-   inside `.main-content` which is a scrolling container — `absolute` scrolls with the page
-   content, desyncing the native window bounds from where the UI visually appears. Also locks
-   background scroll via a `.player-open` class while playing.
-3. **mpv `--vo` choice for `--wid` embedding**: `gpu-next` (libplacebo) is *not* reliable for
-   embedded windows on all Windows GPU/driver combinations — use `--vo=gpu --gpu-context=d3d11`.
-   (This alone did *not* fix a real black-video report — see gotcha #4.)
-4. **The real black-video root cause**: confirmed via a verbose mpv log
-   (`--log-file=%TEMP%\streamio-mpv.log --msg-level=all=v,vo=trace,gpu=trace,cplayer=v`, see
-   `mpvController.js`) that mpv's GPU render pipeline was running perfectly the whole time
-   (continuous per-frame shader timing for the full session). The actual cause was
-   `controlsWindow`'s `transparent: true` rendering as opaque black instead of see-through on this
-   machine — fixed via `setShape()` restricting its real region to just the two control bars (see
-   §3.1). **Lesson: when a symptom looks like "rendering is broken," check the actual mpv log
-   before guessing at codec/vo args again** — the log is cheap and conclusive; blind arg-swapping
-   isn't.
-5. **`app.set("trust proxy", 1)`** is required in `server.js`, or Express doesn't trust Caddy's
-   `X-Forwarded-Proto` header and generates `http://` URLs (for uploaded asset links) behind an
-   HTTPS reverse proxy — a real bug that shipped once and was caught via testing.
-6. **`isDestroyed()` checks are not enough** to prevent a real "Object has been destroyed" crash
-   on app close — a `move`/`resize` event can still fire between the `close` and `closed` events,
-   and `isDestroyed()` can lag one tick behind the native handle actually going away. Fix: a
-   `closing` boolean flag set on `"close"` (before teardown starts), checked first in
-   `applyVideoBounds()`, plus a defensive `try/catch` around the native calls.
-7. **electron-updater's `HttpError.message`** dumps the entire request URL, every response
-   header, and any signed tokens into one giant string — never show this raw to a user;
-   `autoUpdater.js`'s `shortErrorMessage()` reduces it to a short line.
-8. **Large file uploads to GitHub Releases via backgrounded `curl` can silently fail** with no
-   error surfaced — always verify via `curl -sI -L <download-url>` and compare `Content-Length` to
-   the local file size before telling anyone a release is ready. This was gotten wrong twice in
-   this project's history before the verification habit was established.
-9. **Never build a source zip by manually listing exclude-globs** (e.g., copying a directory and
-   trying to filter out `node_modules`/`secrets.env` with PowerShell wildcards) — a flawed glob
-   pattern once included `backend/secrets.env` in a zip that was about to be published. Use
-   `git archive --format=zip -o out.zip HEAD` instead — it only includes tracked files, so
-   anything gitignored/uncommitted structurally cannot leak.
-10. **Screenshot/window-capture tooling is unreliable in this specific sandboxed dev environment**
-    — `GetWindowRect`/`CopyFromScreen` via PowerShell, even with correct PID/HWND lookups
-    confirmed via `Get-Process`, was repeatedly observed capturing a *different* window's content
-    than the one being queried. Root cause not resolved (likely a virtual-display quirk specific
-    to this sandbox). Scripts exist at `scripts/screenshot-window.ps1`, `scripts/find-streamio.ps1`
-    for future refinement, but do not trust their output without independent verification. There
-    is no working click/type automation for native (non-browser) windows in this environment —
-    verifying interactive behavior (button clicks, etc.) requires the human user to test and
-    report back, or reading real diagnostic logs (mpv's log file, `console.log` forwarded from
-    Electron renderer windows into main-process stdout) as the alternative source of truth.
+`secrets.env` (gitignored, present on both local machine and Flex-1, 398 bytes) supplies these — contents intentionally not read/reproduced in this document.
 
-## 8. Standard workflow for any future change
+---
 
-1. Make the code change (backend and/or frontend/electron).
-2. `npx tsc --noEmit -p tsconfig.json` (frontend) and/or `node --check <file>.js` (electron/backend
-   JS) before doing anything else.
-3. If backend changed: scp + `docker compose up -d --build` on Flex-1 (§4), verify via
-   `curl https://163-192-40-120.sslip.io/health` and a targeted endpoint test — don't just assume
-   it deployed correctly.
-4. If Electron/frontend changed: bump `version` in `package.json` (`npm version X.Y.Z
-   --no-git-tag-version`), update the hardcoded version string in `src/pages/settings/About.tsx`,
-   `CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist`, then
-   `robocopy dist\win-unpacked C:\Users\OMEN\Desktop\Streamio /MIR` (kill any running
-   `Streamio.exe` first — robocopy can't overwrite a locked exe).
-5. Commit + push to `main` (secrets are gitignored, verify with
-   `git status --short | grep -i secret` before committing regardless).
-6. Cut a GitHub Release: create it via the API with a properly `git archive`'d source zip, upload
-   `latest.yml` and the source zip synchronously (fast), then the installer exe in the background
-   (~170MB) — **and verify its upload actually completed** (§7.8) before telling the user it's
-   ready.
-7. Follow the changelog format in `CHANGELOG_STANDARD.md` (➕ Added / ✅ Updated / ❓ Preview /
-   ➖ Removed sections) for every release body.
+## 4. Oracle Cloud infrastructure — live state as of this audit
 
-## 9. Discord integration reference
+### Flex-1 — `163.192.40.120` (SSH key: `~/.ssh/streamio_oracle_e5`, user `ubuntu`)
+**Role: production backend.**
+- Ubuntu, kernel `5.15.0-1081-oracle`, 45GB disk (9% used), 11GiB RAM (441MiB used)
+- `docker ps -a`: `streamio-backend-api-1` (up 14h, `127.0.0.1:4000→4000`), `streamio-backend-postgres-1` (up 17h, `postgres:16-alpine`, no host port mapping)
+- Caddy reverse-proxies `163-192-40-120.sslip.io → 127.0.0.1:4000`
+- No cron jobs. App lives at `~/streamio-backend/` (deployed via `scp`, not `git pull` — no git repo checked out on the box)
+- **Live health check confirmed at audit time**: `curl https://163-192-40-120.sslip.io/health` → `{"ok":true,"db":"up"}`
 
-- **Application/Client ID**: `1529308527972192367` (same app used for both RPC and OAuth2 — public
-  value, not sensitive, hardcoded in `discordRpc.js` and `discordOAuth.js`)
-- **Client Secret**: server-side only, in `secrets.env` on Flex-1, never in any client code
-- **OAuth2 Redirect URI** (must be registered in the Discord Developer Portal under this
-  application's OAuth2 settings): `http://127.0.0.1:51823/callback` — a loopback HTTP server
-  Electron spins up only during the OAuth flow (see `discordOAuth.js`)
-- **Scope requested**: `identify` only — nothing else Streamio does requires broader Discord
-  permissions. Do not add `bot`/guild-management scopes or an `Administrator` bot permission
-  without the user explicitly confirming they want that specific capability built — it was
-  offered once via pasted OAuth2 URL generator output and deliberately not adopted since nothing
-  in the app uses it.
+### Flex-2 — `170.9.15.10` (SSH key: `~/.ssh/streamio_oracle_flex2`, user `ubuntu`)
+**Role per original docs: idle / dormant Discord bot host. Actual live state: NOT idle.**
+- Ubuntu, kernel `6.17.0-1018-oracle`, **4 active user sessions**
+- `docker ps -a`: **`jellyfin` container running** (up 10h, healthy) — not part of the Streamio project
+- Caddy active. Plex-related ports open (32400/32401/32600/40043), `plex_update.deb` present
+- `~/streamio-bot/` **is present** (`bot.js`, `botInteractions.js`, `commands.js`, `httpServer.js`, `nowPlayingState.js`, `voicePlayback.js`, `package.json`, `Dockerfile`, ~34KB) — matches documented "dormant guild voice-relay bot," and is confirmed *not* running as a container
+- **⚠️ Undocumented, unrelated content also present in `~ubuntu`**: `bypass_plex.py`, `bypass_plex_strict.py`, `custom_epg.xml`, `disable_ipv6.py`, `dummy.xml`, `dump_embed.py`, `encoder.m3u`, `fix_m3u.py`, `fix_m3u2.py`, `gen.py`, `map.py`, `map_wco.py`, `settings.json`, `streamio-encoder.py`, `test*.py` (several), `threadfin.zip`, `update_epg.py`, `urls.json`, `wco_code.py`, `wco_scraper.py`, `xepg.json` — IPTV/EPG/Plex scraping and encoding tooling, not part of this project's source tree or documentation.
+- **⚠️ Security note**: `settings.json`, `urls.json`, and `xepg.json` in that home directory are **world-writable (`rwxrwxrwx`)**. This was flagged to the user directly and not modified.
 
-## 10. For an AI picking this up cold
+### Flex-3 — `138.2.232.225` (SSH key: `~/.ssh/streamio_oracle_flex3`, user `ubuntu`)
+**Role: reserved/blank. Matches documentation exactly.**
+- Ubuntu, kernel `6.17.0-1018-oracle`, hostname `streamio-flex-discord`
+- `docker ps -a`: empty. No matching services running. Only default files in home directory. Only port 22 open (plus rpcbind/DNS).
 
-Read, in order: this file, then `CHANGELOG_STANDARD.md`, then skim recent commits
-(`git log --oneline -30`) for the most recent context this file might not yet reflect. Check
-`C:\Users\OMEN\Desktop\Streamio\` for what's actually currently installed/tested vs. what's merely
-committed. Assume nothing about "current state" without checking — this project has a real
-history of a fix being committed and pushed correctly while a *deployment* step (upload, docker
-rebuild) silently failed; always verify the live artifact, not just the source.
+---
 
-If continuing via an MCP-connected IDE rather than this exact tool environment: the SSH keys,
-`backend/secrets.env`, and the GitHub credential (via Git Credential Manager, already configured
-on this machine) are all that's needed to reach every system this project touches. There is no
-separate "API" to integrate with beyond standard `ssh`/`scp`, `docker compose`, `git`, and GitHub's
-REST API for releases (`https://api.github.com/repos/DragonAte88/Streamio/...`,
-`https://uploads.github.com/repos/DragonAte88/Streamio/...` for asset uploads).
+## 5. Discord integration
+
+- **Client ID**: `1529308527972192367` — hardcoded (non-secret) in both `electron/discordRpc.js` and `electron/discordOAuth.js`; same Discord application used for both Rich Presence and OAuth2 login-linking.
+- **Client Secret**: server-side only, `DISCORD_CLIENT_SECRET` in `backend/secrets.env` on Flex-1, used in `backend/api/routes/discord.js`'s token exchange. Never present in client code.
+- **OAuth2 redirect URI**: `http://127.0.0.1:51823/callback` — a loopback HTTP server Electron starts only during the OAuth flow (`discordOAuth.js`), matching `DISCORD_REDIRECT_URI` on the backend and in `docker-compose.yml`.
+- **OAuth scope**: `identify` only.
+- **Authorize URL**: `https://discord.com/api/oauth2/authorize?client_id=1529308527972192367&redirect_uri=http%3A%2F%2F127.0.0.1%3A51823%2Fcallback&response_type=code&scope=identify`
+- **Token exchange**: `POST https://discord.com/api/oauth2/token` (server-side, `discord.js`)
+- **Identity fetch**: `GET https://discord.com/api/users/@me` (server-side, Bearer token)
+- **Avatar CDN pattern**: `https://cdn.discordapp.com/avatars/{id}/{avatar}.png`
+- **Rich Presence**: activity type 3 (Watching), `details: <channelName>`, `state: "via Streamio"`, `largeImageKey: "streamio_logo"` — silently no-ops if no local Discord client is running.
+- **Guild voice-relay bot**: code complete at `~/streamio-bot/` on Flex-2, confirmed **not deployed/running**. No webhook URLs, guild IDs, or channel IDs are hardcoded anywhere in the current repo.
+
+---
+
+## 6. Release history (GitHub Releases — all tagged prerelease)
+
+| Version | Published (UTC) | Headline fix/feature |
+|---|---|---|
+| v0.5.9 | 2026-07-24 08:27 | **Real fix** for back button: `.layer` wrapper covered the full window and swallowed clicks meant for content painted elsewhere in it — confirmed via live click-target logging, not guesswork |
+| v0.5.8 | 2026-07-24 08:10 | Controls window made OS-level topmost (`setAlwaysOnTop`) — turned out not to be the actual root cause, but a legitimate hardening |
+| v0.5.7 | 2026-07-24 07:59 | `--hwdec-codecs=h264` restriction, `disableHardwareAcceleration()`, wider back-button hit area |
+| v0.5.4 | 2026-07-24 07:16 | Black-video root cause found (transparent `controlsWindow` rendering opaque) and fixed via `setShape()` |
+| v0.5.3 | 2026-07-24 07:02 | Fixed player drifting with page scroll (`position: absolute` → `fixed`) |
+| v0.5.2 | 2026-07-24 06:47 | Verified v0.5.1 asset integrity, sanitized updater error messages |
+| v0.5.1 | 2026-07-24 06:33 | Badge system (15 badges) shipped; first attempt at black-frame fix (`gpu`+`d3d11`, did not fully fix it) |
+| v0.5.0 | 2026-07-24 05:59 | Transparent always-on-top controls window architecture introduced |
+| v0.4.0 | 2026-07-24 05:25 | 60s auto-updater, changelog modal, install progress bar, restart countdown, Developer Dashboard |
+| v0.3.0 | 2026-07-24 05:00 | Identity/presence, profile customization, admin panel, Discord OAuth2, read receipts/typing indicators |
+| v0.2.0 | 2026-07-24 04:08 | Login/registration, 42-page router, playlist import, search, My List |
+| v0.1.0 | 2026-07-24 03:25 | Phase 1: Electron+mpv player, demo playlist |
+
+Installer size has grown from ~169.6MB (v0.1.0) to ~170.9MB (v0.5.9). `latest.yml` (electron-updater manifest) is a consistent 345 bytes across releases with assets.
+
+**Note:** there is a version-number gap (v0.5.5/v0.5.6 were never released) — v0.5.1 through v0.5.9 were shipped as individually-tagged releases without separate "Bump version" commits for each in git history.
+
+---
+
+## 7. Auto-updater behavior
+
+- `electron-updater`, `autoUpdater.allowPrerelease = true` (required, since every release to date is marked prerelease on GitHub), `autoDownload = false`
+- Checks automatically every **60 seconds**, or on-demand via the "Refresh Updater" button in Settings → About
+- On update found: button becomes `Update to v<version>`, click triggers manual download with a live progress bar
+- On download complete: button becomes `Restart & Install`; clicking it broadcasts a 6-second countdown to the renderer, stops mpv, then calls `quitAndInstall()`
+- `shortErrorMessage()` in `autoUpdater.js` maps raw `electron-updater` `HttpError` dumps (which otherwise leak full URLs/headers) into short messages — e.g. HTTP 404 → "No update package found on GitHub yet"
+
+---
+
+## 8. Known gotchas (for future work)
+
+1. **mpv always paints above renderer content in its owning window** — never try to put UI back into `mainWindow`'s DOM over the video; it requires a separate topmost window.
+2. **`position: absolute` inside a scrolling ancestor drifts with scroll** — anything meant to track a fixed screen region (like the player bounds reporter) must use `position: fixed`.
+3. **A full-screen "layer" `<div>` with `pointer-events: auto` captures clicks everywhere in its box, not just where content is visually painted** — this was the real root cause of the v0.5.0–v0.5.8 back-button saga. Always scope `pointer-events: auto` to the actual visible content elements, not their full-screen positioning wrapper.
+4. **`transparent: true` BrowserWindows can render opaque black instead of see-through** on some Windows GPU/driver combinations — `setShape()` sidesteps this by making the non-content region genuinely not part of the window at the OS level.
+5. **`isDestroyed()` can lag one tick behind actual native handle teardown** — guard with an explicit `closing` flag set on the `"close"` event (before `"closed"`), not just `isDestroyed()` checks.
+6. **electron-updater's raw `HttpError` includes full request URLs/headers** — always sanitize before showing to users.
+7. **Backgrounded `curl` uploads to GitHub Releases can silently fail with no visible error** — always verify via `curl -sI -L <download-url>` and compare `Content-Length` to the local file size before telling anyone a release is ready.
+8. **`git archive --format=zip -o out.zip HEAD`** is the only safe way to produce a source zip — manual exclude-glob copying has leaked `secrets.env` before.
+9. When debugging rendering/click issues, **prefer live diagnostic logging over guessing** — the v0.5.9 fix was found in minutes once click-target logging was added; several earlier releases shipped plausible-sounding fixes that didn't address the actual bug.
+10. Packaged Electron builds are `asar`-bundled by default — for fast iteration when debugging, run `npx electron .` directly against source (`NODE_ENV=production npx electron .` loads the built `dist/` without needing a full `electron-builder` repackage).
+
+---
+
+## 9. Standard workflow for shipping a change
+
+1. Make the code change, `npx tsc --noEmit -p tsconfig.json` to verify no type errors
+2. Kill any running `Streamio.exe`/`electron.exe` processes
+3. Bump `package.json` version (`npm version <x.y.z> --no-git-tag-version`) and `src/pages/settings/About.tsx`'s displayed version string
+4. `CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist` — builds `dist/win-unpacked/` and `dist/Streamio-Setup-<version>.exe`
+5. `robocopy dist\win-unpacked C:\Users\OMEN\Desktop\Streamio /MIR` — sync into the real test-install path (the only path that should ever be used for testing, per explicit instruction)
+6. Commit and push to `main`
+7. `git archive --format=zip -o <tmp>\Streamio-source-v<version>.zip HEAD` for the source asset
+8. Create the GitHub release (prerelease, changelog per `CHANGELOG_STANDARD.md`'s ➕✅❓➖ format), upload `latest.yml`, the source zip, and the installer exe (large upload should run in the background)
+9. **Always verify the large exe upload actually completed** via `curl -sI -L <download-url>` Content-Length match before telling anyone the release is ready — silent background-upload failures have happened before
+
+---
+
+## 10. Explicitly declined / out-of-scope features
+
+- YouTube re-hosting/proxying
+- Discord voice-channel relay directly into user DMs
+- Bot editing a user's personal Discord presence while their client is closed
+
+## 11. Roadmap / not yet built
+
+- Room-invite deep links
+- Moderator tools beyond basic room ownership
+- Group DMs (currently 1:1 only)
+- WebSocket-based chat (currently 3-second polling)
+- Activating the dormant guild voice-relay bot on Flex-2
+
+---
+
+## 12. AI handoff — quick orientation for a new session
+
+- Read this file first, then check `git log --oneline -20` in `desktop-app/` for anything shipped after this doc's "Last updated" date.
+- Test builds **only** against `C:\Users\OMEN\Desktop\Streamio\Streamio.exe` (synced via robocopy), never the raw `dist/win-unpacked` copy, per explicit user instruction.
+- SSH keys for all three Oracle instances live at `~/.ssh/streamio_oracle*` — no `~/.ssh/config` aliases are set up; connect directly with `-i <key> user@<ip>`.
+- Do not read or print `backend/secrets.env` or any `.env` file contents into chat or logs.
+- The user's standing instruction: verify large file uploads before declaring a release ready, and prefer live diagnostic evidence over guessing when debugging rendering/input bugs.
