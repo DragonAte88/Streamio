@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <style>
-  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; height: 100%; font-family: "Segoe UI", sans-serif; user-select: none; }
+  html, body { margin: 0; padding: 0; background: rgba(0, 0, 0, 0.01); overflow: hidden; height: 100%; font-family: "Segoe UI", sans-serif; user-select: none; }
   .layer { position: fixed; inset: 0; opacity: 0; transition: opacity 0.25s ease; pointer-events: none; }
   .layer.visible { opacity: 1; pointer-events: auto; }
 
@@ -38,8 +38,10 @@
 <body>
   <div id="topLayer" class="layer visible">
     <div class="topbar">
-      <button class="back-btn" id="backBtn">←</button>
-      <span class="back-label" id="backLabel">Back</span>
+      <div id="backArea" style="display: flex; align-items: center; gap: 14px; cursor: pointer;">
+        <button class="back-btn" id="backBtn" style="pointer-events: none;">←</button>
+        <span class="back-label" id="backLabel">Back</span>
+      </div>
       <span class="title" id="title"></span>
     </div>
   </div>

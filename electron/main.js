@@ -6,6 +6,8 @@ const discordOAuth = require("./discordOAuth");
 const autoUpdaterModule = require("./autoUpdater");
 const systemStats = require("./systemStats");
 
+app.disableHardwareAcceleration();
+
 let mainWindow;
 let videoWindow;
 let controlsWindow;
@@ -227,19 +229,6 @@ function applyVideoBounds() {
 
       if (alive(controlsWindow)) {
         controlsWindow.setBounds(bounds);
-        try {
-          controlsWindow.setShape([
-            { x: 0, y: 0, width: bounds.width, height: Math.min(TOP_BAR_HEIGHT, bounds.height) },
-            {
-              x: 0,
-              y: Math.max(0, bounds.height - BOTTOM_BAR_HEIGHT),
-              width: bounds.width,
-              height: Math.min(BOTTOM_BAR_HEIGHT, bounds.height)
-            }
-          ]);
-        } catch (e) {
-          console.error("[applyVideoBounds] setShape failed:", e.message);
-        }
         if (!controlsWindow.isVisible()) controlsWindow.showInactive();
         controlsWindow.moveTop(); // keep controls above the mpv window
       }

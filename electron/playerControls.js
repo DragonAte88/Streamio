@@ -1,6 +1,6 @@
 const topLayer = document.getElementById("topLayer");
 const bottomLayer = document.getElementById("bottomLayer");
-const backBtn = document.getElementById("backBtn");
+const backArea = document.getElementById("backArea");
 const backLabel = document.getElementById("backLabel");
 const titleEl = document.getElementById("title");
 const seek = document.getElementById("seek");
@@ -53,7 +53,7 @@ window.player.onExit(() => {
   centerMsg.style.display = "flex";
 });
 
-backBtn.addEventListener("click", () => {
+backArea.addEventListener("click", () => {
   console.log("[playerControls] back button clicked, sending request");
   window.playerControlsBridge.requestBack();
 });

@@ -30,6 +30,13 @@ class MpvController {
       "--osd-level=0",
       "--keep-open=yes",
       "--hwdec=auto",
+      // Restrict hardware decode to H.264 only - the codec virtually every
+      // live IPTV/HLS source actually uses. Anything else (H.265, VP9, etc.)
+      // falls back to software decode, which always works and avoids
+      // hwdec-driver edge cases entirely for the codecs that aren't the
+      // common case here. This doesn't reject other codecs, it just doesn't
+      // gamble hardware-decode compatibility on them.
+      "--hwdec-codecs=h264",
       // gpu-next (libplacebo) can silently fail to paint into a --wid embedded
       // window on some Windows GPU/driver combos - audio and time-pos keep
       // advancing normally while the video surface just stays black. The
