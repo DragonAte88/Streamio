@@ -21,7 +21,7 @@ function init(mainWindow) {
   autoUpdater.on("update-downloaded", (info) =>
     send("updater:status", { state: "downloaded", version: info.version, releaseNotes: normalizeNotes(info.releaseNotes) })
   );
-  autoUpdater.on("error", (err) => send("updater:status", { state: "error", message: err.message }));
+  autoUpdater.on("error", (err) => send("updater:status", { state: "error", message: shortErrorMessage(err) }));
 
   // Auto-check every minute, same as a manual "Refresh Updater" press.
   const interval = setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), CHECK_INTERVAL_MS);
@@ -33,6 +33,22 @@ function init(mainWindow) {
     installNow: () => autoUpdater.quitAndInstall(false, true),
     stopAutoCheck: () => clearInterval(interval)
   };
+}
+
+// electron-updater's HttpError.message dumps the entire request/response
+// (every header, the full URL, a JWT, etc.) into one giant string - fine for
+// a log, never fine to show a user. Reduce to a short, human line.
+function shortErrorMessage(err) {
+  const raw = String(err?.message || err);
+  const statusMatch = raw.match(/HttpError:\s*(\d{3})/);
+  if (statusMatch) {
+    const code = statusMatch[1];
+    if (code === "404") return "No update package found on GitHub yet - try again shortly.";
+    return `Update server returned an error (HTTP ${code}). Try again shortly.`;
+  }
+  // Otherwise just take the first line/sentence, capped, instead of the raw dump.
+  const firstLine = raw.split("\n")[0];
+  return firstLine.length > 140 ? firstLine.slice(0, 140) + "…" : firstLine;
 }
 
 function normalizeNotes(notes) {
