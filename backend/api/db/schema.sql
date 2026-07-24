@@ -173,3 +173,16 @@ CREATE TABLE IF NOT EXISTS user_badges (
   granted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   PRIMARY KEY (user_id, badge_slug)
 );
+
+-- Advanced Artwork Pipeline Persistent Cache
+CREATE TABLE IF NOT EXISTS artwork_cache (
+  query_key TEXT PRIMARY KEY,       -- e.g., "tv:breaking bad"
+  title TEXT NOT NULL,
+  resolved_name TEXT,
+  tmdb_id INTEGER,
+  overview TEXT,
+  poster_url TEXT,
+  background_url TEXT,
+  source TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
