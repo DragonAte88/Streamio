@@ -115,6 +115,13 @@ function createControlsWindow() {
   });
   controlsWindow.setMenu(null);
   controlsWindow.setIgnoreMouseEvents(false);
+  // mpv's native --wid child window can call SetWindowPos(HWND_TOP) on its own
+  // during playback (swap-chain repaints), silently re-stealing top z-order
+  // from controlsWindow after the one-shot moveTop() in applyVideoBounds().
+  // videoWindow is a normal (non-topmost) window, so putting controlsWindow in
+  // the OS-level topmost band means mpv's internal HWND_TOP requests - which
+  // only reorder within the non-topmost band - can never cross above it.
+  controlsWindow.setAlwaysOnTop(true, "screen-saver");
   // Forward this window's renderer console.log into our own stdout so click
   // diagnostics show up in the same log stream as everything else, instead
   // of being trapped in a devtools window nobody has open.
