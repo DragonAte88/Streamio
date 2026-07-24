@@ -5,15 +5,35 @@ import ContentRow from "./components/ContentRow";
 import PlayerView from "./components/PlayerView";
 import { Channel, groupChannels, parseM3U } from "./lib/playlist";
 import { DEMO_M3U } from "./lib/demoPlaylist";
+import { fetchCatalog } from "./lib/api";
 
 export default function App() {
   const [nav, setNav] = useState<NavKey>("home");
   const [channels, setChannels] = useState<Channel[]>([]);
   const [playing, setPlaying] = useState<Channel | null>(null);
   const [query, setQuery] = useState("");
+  const [source, setSource] = useState<"backend" | "demo" | null>(null);
 
   useEffect(() => {
-    setChannels(parseM3U(DEMO_M3U));
+    fetchCatalog()
+      .then((apiChannels) => {
+        if (apiChannels.length === 0) throw new Error("empty catalog");
+        setChannels(
+          apiChannels.map((c) => ({
+            id: String(c.id),
+            name: c.name,
+            url: c.url,
+            logo: c.logo || undefined,
+            group: c.group_name,
+            tvgId: c.tvg_id || undefined
+          }))
+        );
+        setSource("backend");
+      })
+      .catch(() => {
+        setChannels(parseM3U(DEMO_M3U));
+        setSource("demo");
+      });
   }, []);
 
   const groups = useMemo(() => groupChannels(channels), [channels]);
@@ -72,7 +92,10 @@ export default function App() {
         {nav === "settings" && (
           <div className="empty-state">
             <h2>Settings</h2>
-            <p>Playlist source, account, and backend sync options land here in a later phase.</p>
+            <p>
+              Channel source: {source === "backend" ? "Oracle Cloud backend catalog" : source === "demo" ? "local demo playlist (backend catalog is empty or unreachable)" : "loading…"}
+            </p>
+            <p>Account login, playlist import, and backend sync UI land here in a later phase.</p>
           </div>
         )}
 
