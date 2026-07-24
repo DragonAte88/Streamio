@@ -24,7 +24,12 @@ contextBridge.exposeInMainWorld("player", {
 contextBridge.exposeInMainWorld("discord", {
   setWatching: (channelName) => ipcRenderer.invoke("discord:watching", channelName),
   clear: () => ipcRenderer.invoke("discord:clear"),
-  startOAuth: () => ipcRenderer.invoke("discord:oauth:start")
+  startOAuth: () => ipcRenderer.invoke("discord:oauth:start"),
+  isConnected: () => ipcRenderer.invoke("discord:isConnected")
+});
+
+contextBridge.exposeInMainWorld("system", {
+  getStats: () => ipcRenderer.invoke("system:stats")
 });
 
 contextBridge.exposeInMainWorld("updater", {
@@ -35,5 +40,10 @@ contextBridge.exposeInMainWorld("updater", {
     const listener = (_e, status) => cb(status);
     ipcRenderer.on("updater:status", listener);
     return () => ipcRenderer.removeListener("updater:status", listener);
+  },
+  onRestartCountdown: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on("updater:restart-countdown", listener);
+    return () => ipcRenderer.removeListener("updater:restart-countdown", listener);
   }
 });

@@ -42,4 +42,8 @@ function clear() {
   client.user?.clearActivity().catch(() => {});
 }
 
-module.exports = { init, setWatching, clear };
+function isConnected() {
+  return { connected: ready, username: client?.user?.username || null };
+}
+
+module.exports = { init, setWatching, clear, isConnected };

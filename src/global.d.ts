@@ -18,12 +18,29 @@ declare global {
       setWatching: (channelName: string) => Promise<void>;
       clear: () => Promise<void>;
       startOAuth: () => Promise<string>;
+      isConnected: () => Promise<{ connected: boolean; username: string | null }>;
+    };
+    system: {
+      getStats: () => Promise<{
+        cpu: { percent: number; model?: string; cores: number };
+        memory: { totalBytes: number; freeBytes: number };
+        disk: { totalBytes: number; freeBytes: number } | null;
+        network: { totalReceivedBytes: number; totalSentBytes: number } | null;
+        gpu: any;
+        platform: string;
+        arch: string;
+        hostname: string;
+        uptimeSeconds: number;
+      }>;
     };
     updater: {
       check: () => Promise<void>;
       download: () => Promise<void>;
       install: () => Promise<void>;
-      onStatus: (cb: (status: { state: string; version?: string; percent?: number; message?: string }) => void) => () => void;
+      onStatus: (
+        cb: (status: { state: string; version?: string; percent?: number; message?: string; releaseNotes?: string }) => void
+      ) => () => void;
+      onRestartCountdown: (cb: (payload: { secondsLeft: number }) => void) => () => void;
     };
   }
 }

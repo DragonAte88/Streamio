@@ -4,6 +4,7 @@ const { MpvController } = require("./mpvController");
 const discordRpc = require("./discordRpc");
 const discordOAuth = require("./discordOAuth");
 const autoUpdaterModule = require("./autoUpdater");
+const systemStats = require("./systemStats");
 
 let mainWindow;
 let videoWindow;
@@ -71,10 +72,32 @@ app.whenReady().then(() => {
     return discordOAuth.startOAuthFlow();
   });
 
+  ipcMain.handle("system:stats", () => systemStats.getStats());
+  ipcMain.handle("discord:isConnected", () => discordRpc.isConnected());
+
   const updater = autoUpdaterModule.init(mainWindow);
   ipcMain.handle("updater:check", () => updater.check());
   ipcMain.handle("updater:download", () => updater.download());
-  ipcMain.handle("updater:install", () => updater.installNow());
+  ipcMain.handle("updater:install", async () => {
+    // Make sure our own child process (mpv) is gone before handing off to the
+    // installer, so nothing is left holding files open or running orphaned.
+    if (mpv) {
+      mpv.stop();
+      mpv = null;
+    }
+    for (let remaining = 6; remaining > 0; remaining--) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("updater:restart-countdown", { secondsLeft: remaining });
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    // quitAndInstall(false, true): not silent (shows the NSIS UI briefly) and
+    // force-relaunches after. The installer itself can't overwrite/replace
+    // Streamio.exe until this process has actually exited, and won't launch
+    // the new version until that replace completes - so "the old process is
+    // closed" is enforced by the OS file lock, not something we need to poll.
+    updater.installNow();
+  });
 
   ipcMain.handle("player:start", async () => {
     if (mpv) mpv.stop();

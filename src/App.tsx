@@ -24,6 +24,7 @@ import Invites from "./pages/social/Invites";
 import Admin from "./pages/Admin";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminAssets from "./pages/admin/AdminAssets";
+import DevDashboard from "./pages/admin/DevDashboard";
 import MyList from "./pages/MyList";
 import Playlists from "./pages/Playlists";
 import PlaylistAdd from "./pages/PlaylistAdd";
@@ -95,6 +96,7 @@ export default function App() {
                     <Route index element={<Navigate to="users" replace />} />
                     <Route path="users" element={<AdminUsers />} />
                     <Route path="assets" element={<AdminAssets />} />
+                    <Route path="dashboard" element={<DevDashboard />} />
                   </Route>
 
                   <Route path="/settings" element={<Settings />}>

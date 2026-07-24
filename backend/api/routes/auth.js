@@ -1,9 +1,25 @@
 const express = require("express");
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const pool = require("../db/pool");
 
 const router = express.Router();
+
+function randomDigits(n) {
+  let s = "";
+  for (let i = 0; i < n; i++) s += crypto.randomInt(0, 10);
+  return s;
+}
+
+async function assignInternalAccountId(client) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidate = `${randomDigits(12)}.#${randomDigits(6)}`;
+    const exists = await client.query("SELECT 1 FROM users WHERE internal_account_id=$1", [candidate]);
+    if (exists.rows.length === 0) return candidate;
+  }
+  throw new Error("could not allocate an internal account id");
+}
 
 async function assignDiscriminator(client, username) {
   for (let n = 1; n <= 9999; n++) {
@@ -34,12 +50,13 @@ router.post("/register", async (req, res) => {
   try {
     await client.query("BEGIN");
     const discriminator = await assignDiscriminator(client, username);
+    const internalAccountId = await assignInternalAccountId(client);
     const result = await client.query(
-      `INSERT INTO users (email, password_hash, display_name, username, discriminator)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO users (email, password_hash, display_name, username, discriminator, internal_account_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, email, display_name, username, discriminator, avatar_url, banner_url, accent_color, bio,
                  onboarded, status, role, can_upload_assets, suspended`,
-      [email.toLowerCase().trim(), hash, displayName || null, username, discriminator]
+      [email.toLowerCase().trim(), hash, displayName || null, username, discriminator, internalAccountId]
     );
     await client.query("COMMIT");
     const user = result.rows[0];

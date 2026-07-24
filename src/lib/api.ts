@@ -219,6 +219,18 @@ export async function adminRevokeUpload(token: string, userId: number) {
   await fetch(`${API_BASE}/admin/users/${userId}/revoke-upload`, { method: "POST", headers: authHeaders(token) });
 }
 
+export async function fetchAdminStats(token: string) {
+  const res = await fetch(`${API_BASE}/admin/stats`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error(`stats fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchAdminLogs(token: string) {
+  const res = await fetch(`${API_BASE}/admin/logs`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error(`logs fetch failed: ${res.status}`);
+  return (await res.json()).logs;
+}
+
 // --- Assets ---
 
 export async function fetchAssets(token: string): Promise<ApiAsset[]> {

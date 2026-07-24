@@ -5,7 +5,8 @@ import { useAuth } from "../lib/auth";
 
 const TABS = [
   { path: "/admin/users", label: "Users" },
-  { path: "/admin/assets", label: "Assets" }
+  { path: "/admin/assets", label: "Assets" },
+  { path: "/admin/dashboard", label: "Developer Dashboard" }
 ];
 
 export default function Admin() {

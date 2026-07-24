@@ -36,6 +36,14 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_refresh_token TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_username TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_avatar_url TEXT;
 
+-- Internal-only unique account identifier, format "############.#######" (12
+-- digits, a literal dot, then a 6-digit sequence). Never surfaced in any
+-- normal-facing API response (no route currently selects it into a user
+-- object sent to a non-admin) - it exists purely for account security /
+-- unambiguous identification, e.g. matching support requests or audit trails
+-- to one exact account regardless of email/username changes.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS internal_account_id TEXT UNIQUE;
+
 CREATE TABLE IF NOT EXISTS channels (
   id SERIAL PRIMARY KEY,
   tvg_id TEXT,

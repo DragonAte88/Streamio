@@ -3,6 +3,7 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const pool = require("./db/pool");
+require("./lib/logBuffer").install();
 
 const app = express();
 app.set("trust proxy", 1);

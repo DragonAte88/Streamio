@@ -33,6 +33,9 @@ export default function AdminUsers() {
               {u.email} · {u.suspended ? `Suspended (${u.suspended_reason})` : "Active"} ·{" "}
               {u.can_upload_assets ? "Can upload" : "No upload permission"}
             </div>
+            <div className="playlist-meta" style={{ fontFamily: "monospace", fontSize: 10, opacity: 0.6 }}>
+              ID: {u.internal_account_id}
+            </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", maxWidth: 320, justifyContent: "flex-end" }}>
             {u.suspended ? (
