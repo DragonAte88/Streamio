@@ -3,7 +3,7 @@ export {};
 declare global {
   interface Window {
     player: {
-      start: () => Promise<boolean>;
+      start: (meta?: { channelName: string; backLabel: string }) => Promise<boolean>;
       load: (url: string) => Promise<boolean>;
       play: () => Promise<void>;
       pause: () => Promise<void>;
@@ -13,6 +13,7 @@ declare global {
       setBounds: (bounds: { x: number; y: number; width: number; height: number; visible: boolean }) => void;
       onPropertyChange: (cb: (msg: any) => void) => () => void;
       onExit: (cb: (msg: any) => void) => () => void;
+      onBack: (cb: () => void) => () => void;
     };
     discord: {
       setWatching: (channelName: string) => Promise<void>;

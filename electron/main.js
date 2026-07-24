@@ -8,9 +8,15 @@ const systemStats = require("./systemStats");
 
 let mainWindow;
 let videoWindow;
+let controlsWindow;
 let mpv;
+let lastBounds = null;
 
 const isDev = process.env.NODE_ENV === "development";
+
+function alive(win) {
+  return win && !win.isDestroyed();
+}
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -37,10 +43,15 @@ function createMainWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
     if (mpv) mpv.stop();
-    if (videoWindow) videoWindow.close();
+    if (alive(videoWindow)) videoWindow.close();
+    if (alive(controlsWindow)) controlsWindow.close();
   });
+
+  mainWindow.on("move", () => applyVideoBounds());
+  mainWindow.on("resize", () => applyVideoBounds());
 }
 
+// Real native mpv render target - a plain window, no web content of its own.
 function createVideoWindow() {
   videoWindow = new BrowserWindow({
     parent: mainWindow,
@@ -57,9 +68,36 @@ function createVideoWindow() {
   videoWindow.loadURL("data:text/html,<body style='margin:0;background:#000'></body>");
 }
 
+// A transparent, always-on-top window sized identically to videoWindow, sitting
+// above it in z-order. mpv's native window paints over ALL renderer content at
+// its bounds, so the only way to show UI (back button, seek bar) "on top of"
+// the video is a second real window layered above it - not a DOM overlay in
+// mainWindow, which would render behind mpv regardless of CSS z-index.
+function createControlsWindow() {
+  controlsWindow = new BrowserWindow({
+    parent: mainWindow,
+    show: false,
+    frame: false,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  controlsWindow.setMenu(null);
+  controlsWindow.setIgnoreMouseEvents(false);
+  controlsWindow.loadFile(path.join(__dirname, "playerControls.html"));
+}
+
 app.whenReady().then(() => {
   createMainWindow();
   createVideoWindow();
+  createControlsWindow();
   discordRpc.init();
 
   ipcMain.handle("discord:watching", (_e, channelName) => {
@@ -79,27 +117,18 @@ app.whenReady().then(() => {
   ipcMain.handle("updater:check", () => updater.check());
   ipcMain.handle("updater:download", () => updater.download());
   ipcMain.handle("updater:install", async () => {
-    // Make sure our own child process (mpv) is gone before handing off to the
-    // installer, so nothing is left holding files open or running orphaned.
     if (mpv) {
       mpv.stop();
       mpv = null;
     }
     for (let remaining = 6; remaining > 0; remaining--) {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("updater:restart-countdown", { secondsLeft: remaining });
-      }
+      if (alive(mainWindow)) mainWindow.webContents.send("updater:restart-countdown", { secondsLeft: remaining });
       await new Promise((r) => setTimeout(r, 1000));
     }
-    // quitAndInstall(false, true): not silent (shows the NSIS UI briefly) and
-    // force-relaunches after. The installer itself can't overwrite/replace
-    // Streamio.exe until this process has actually exited, and won't launch
-    // the new version until that replace completes - so "the old process is
-    // closed" is enforced by the OS file lock, not something we need to poll.
     updater.installNow();
   });
 
-  ipcMain.handle("player:start", async () => {
+  ipcMain.handle("player:start", async (_e, meta) => {
     if (mpv) mpv.stop();
     mpv = new MpvController();
     const hwndBuf = videoWindow.getNativeWindowHandle();
@@ -111,17 +140,21 @@ app.whenReady().then(() => {
     mpv.observe("percent-pos", 4);
     mpv.observe("demuxer-cache-duration", 5);
     mpv.on("property-change", (msg) => {
-      if (mainWindow) mainWindow.webContents.send("player:property-change", msg);
+      if (alive(mainWindow)) mainWindow.webContents.send("player:property-change", msg);
+      if (alive(controlsWindow)) controlsWindow.webContents.send("player:property-change", msg);
     });
     mpv.on("mpv-exit", (msg) => {
-      if (mainWindow) mainWindow.webContents.send("player:mpv-exit", msg);
+      if (alive(mainWindow)) mainWindow.webContents.send("player:mpv-exit", msg);
+      if (alive(controlsWindow)) controlsWindow.webContents.send("player:mpv-exit", msg);
     });
+    if (alive(controlsWindow) && meta) controlsWindow.webContents.send("player:meta", meta);
     return true;
   });
 
   ipcMain.handle("player:load", async (_e, url) => {
     if (!mpv) return false;
     await mpv.loadFile(url);
+    if (alive(controlsWindow)) controlsWindow.webContents.send("player:ready");
     return true;
   });
 
@@ -134,7 +167,8 @@ app.whenReady().then(() => {
       mpv.stop();
       mpv = null;
     }
-    if (videoWindow) videoWindow.hide();
+    if (alive(videoWindow)) videoWindow.hide();
+    if (alive(controlsWindow)) controlsWindow.hide();
     return true;
   });
 
@@ -143,24 +177,32 @@ app.whenReady().then(() => {
     applyVideoBounds();
   });
 
-  mainWindow.on("move", () => applyVideoBounds());
-  mainWindow.on("resize", () => applyVideoBounds());
+  ipcMain.on("player:back-requested", () => {
+    if (alive(mainWindow)) mainWindow.webContents.send("player:back");
+  });
 });
 
-let lastBounds = null;
 function applyVideoBounds() {
-  if (!lastBounds || !videoWindow || !mainWindow) return;
+  if (!lastBounds || !alive(videoWindow) || !alive(mainWindow)) return;
   const mb = mainWindow.getContentBounds();
   if (lastBounds.visible) {
-    videoWindow.setBounds({
+    const bounds = {
       x: mb.x + Math.round(lastBounds.x),
       y: mb.y + Math.round(lastBounds.y),
       width: Math.max(1, Math.round(lastBounds.width)),
       height: Math.max(1, Math.round(lastBounds.height))
-    });
+    };
+    videoWindow.setBounds(bounds);
     if (!videoWindow.isVisible()) videoWindow.showInactive();
+
+    if (alive(controlsWindow)) {
+      controlsWindow.setBounds(bounds);
+      if (!controlsWindow.isVisible()) controlsWindow.showInactive();
+      controlsWindow.moveTop(); // keep controls above the mpv window
+    }
   } else {
     videoWindow.hide();
+    if (alive(controlsWindow)) controlsWindow.hide();
   }
 }
 

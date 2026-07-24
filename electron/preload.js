@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("player", {
-  start: () => ipcRenderer.invoke("player:start"),
+  start: (meta) => ipcRenderer.invoke("player:start", meta),
   load: (url) => ipcRenderer.invoke("player:load", url),
   play: () => ipcRenderer.invoke("player:play"),
   pause: () => ipcRenderer.invoke("player:pause"),
@@ -18,6 +18,25 @@ contextBridge.exposeInMainWorld("player", {
     const listener = (_e, msg) => cb(msg);
     ipcRenderer.on("player:mpv-exit", listener);
     return () => ipcRenderer.removeListener("player:mpv-exit", listener);
+  },
+  onBack: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on("player:back", listener);
+    return () => ipcRenderer.removeListener("player:back", listener);
+  }
+});
+
+contextBridge.exposeInMainWorld("playerControlsBridge", {
+  requestBack: () => ipcRenderer.send("player:back-requested"),
+  onMeta: (cb) => {
+    const listener = (_e, meta) => cb(meta);
+    ipcRenderer.on("player:meta", listener);
+    return () => ipcRenderer.removeListener("player:meta", listener);
+  },
+  onReady: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on("player:ready", listener);
+    return () => ipcRenderer.removeListener("player:ready", listener);
   }
 });
 
