@@ -4,8 +4,15 @@
 <meta charset="utf-8" />
 <style>
   html, body { margin: 0; padding: 0; background: rgba(0, 0, 0, 0.01); overflow: hidden; height: 100%; font-family: "Segoe UI", sans-serif; user-select: none; }
+  /* .layer itself stays full-screen and click-through always - only its actual
+     visible content (.topbar / .bottom) should ever capture clicks. Without
+     this, whichever .layer comes later in the DOM (bottomLayer) sits on top
+     of topLayer across the ENTIRE window in hit-testing, even in the empty
+     space where nothing is painted, silently swallowing clicks meant for the
+     back button above it. */
   .layer { position: fixed; inset: 0; opacity: 0; transition: opacity 0.25s ease; pointer-events: none; }
-  .layer.visible { opacity: 1; pointer-events: auto; }
+  .layer.visible { opacity: 1; }
+  .layer.visible .topbar, .layer.visible .bottom { pointer-events: auto; }
 
   .topbar {
     position: fixed; top: 0; left: 0; right: 0; padding: 20px 28px;

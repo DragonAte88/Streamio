@@ -54,7 +54,6 @@ window.player.onExit(() => {
 });
 
 backArea.addEventListener("click", () => {
-  console.log("[playerControls] back button clicked, sending request");
   window.playerControlsBridge.requestBack();
 });
 
