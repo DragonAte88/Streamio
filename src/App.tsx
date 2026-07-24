@@ -8,10 +8,17 @@ import { PlaybackProvider } from "./lib/PlaybackContext";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import Setup from "./pages/Setup";
 import Home from "./pages/Home";
 import LiveTV from "./pages/LiveTV";
 import Search from "./pages/Search";
 import Library from "./pages/Library";
+import Social from "./pages/Social";
+import Friends from "./pages/social/Friends";
+import Requests from "./pages/social/Requests";
+import Rooms from "./pages/social/Rooms";
+import RoomDetail from "./pages/social/RoomDetail";
+import Roadmap from "./pages/social/Roadmap";
 import MyList from "./pages/MyList";
 import Playlists from "./pages/Playlists";
 import PlaylistAdd from "./pages/PlaylistAdd";
@@ -42,6 +49,7 @@ export default function App() {
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route path="/register" element={<Register />} />
+                <Route path="/setup" element={<Setup />} />
 
                 <Route element={<Layout />}>
                   <Route path="/" element={<Navigate to="/home" replace />} />
@@ -65,6 +73,15 @@ export default function App() {
                         element={<Placeholder title={r.title} description={r.description} />}
                       />
                     ))}
+                  </Route>
+
+                  <Route path="/social" element={<Social />}>
+                    <Route index element={<Navigate to="friends" replace />} />
+                    <Route path="friends" element={<Friends />} />
+                    <Route path="requests" element={<Requests />} />
+                    <Route path="rooms" element={<Rooms />} />
+                    <Route path="rooms/:roomId" element={<RoomDetail />} />
+                    <Route path="roadmap" element={<Roadmap />} />
                   </Route>
 
                   <Route path="/settings" element={<Settings />}>

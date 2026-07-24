@@ -15,8 +15,8 @@ export default function Login() {
     setError(null);
     setBusy(true);
     try {
-      await login(email, password);
-      nav("/home");
+      const user = await login(email, password);
+      nav(user.onboarded ? "/home" : "/setup");
     } catch (err: any) {
       setError(err.message || "Login failed");
     } finally {

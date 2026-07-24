@@ -1,17 +1,23 @@
 import React, { useMemo, useState } from "react";
 import { useCatalog } from "../lib/CatalogContext";
 import { usePlayback } from "../lib/PlaybackContext";
+import FilterBar, { FilterState } from "../components/FilterBar";
 
 export default function Search() {
-  const { channels, loading } = useCatalog();
+  const { channels, groups, loading } = useCatalog();
   const { play } = usePlayback();
   const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<FilterState>({ genre: "all", sort: "none" });
 
   const results = useMemo(() => {
     if (!query.trim()) return [];
     const q = query.toLowerCase();
-    return channels.filter((c) => c.name.toLowerCase().includes(q) || c.group.toLowerCase().includes(q));
-  }, [channels, query]);
+    let list = channels.filter((c) => c.name.toLowerCase().includes(q) || c.group.toLowerCase().includes(q));
+    if (filters.genre !== "all") list = list.filter((c) => c.group === filters.genre);
+    if (filters.sort === "az" || filters.sort === "rating") list = [...list].sort((a, b) => a.name.localeCompare(b.name));
+    else if (filters.sort === "za") list = [...list].sort((a, b) => b.name.localeCompare(a.name));
+    return list;
+  }, [channels, query, filters]);
 
   return (
     <div className="row-section" style={{ paddingTop: 40 }}>
@@ -29,9 +35,11 @@ export default function Search() {
           background: "#16161d",
           color: "#f4f4f6",
           fontSize: 15,
-          marginBottom: 24
+          marginBottom: 8
         }}
       />
+      <FilterBar groupNames={groups.map((g) => g.name)} filters={filters} onChange={setFilters} />
+      <div style={{ height: 16 }} />
       {loading && <p style={{ color: "var(--text-dim)" }}>Loading catalog…</p>}
       {!loading && query && results.length === 0 && <p style={{ color: "var(--text-dim)" }}>No results for "{query}".</p>}
       {!loading && results.length > 0 && (

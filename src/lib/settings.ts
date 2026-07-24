@@ -4,6 +4,7 @@ export interface Settings {
   defaultVolume: number;
   theme: "dark" | "light" | "system";
   discordRpcEnabled: boolean;
+  discordBotStatusEnabled: boolean;
   autoplayNext: boolean;
   subtitleLanguage: string;
   audioLanguage: string;
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultVolume: 100,
   theme: "dark",
   discordRpcEnabled: true,
+  discordBotStatusEnabled: false,
   autoplayNext: false,
   subtitleLanguage: "off",
   audioLanguage: "default",

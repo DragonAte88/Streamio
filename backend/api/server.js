@@ -21,6 +21,8 @@ app.use("/auth", require("./routes/auth"));
 app.use("/channels", require("./routes/channels"));
 app.use("/watchlist", require("./routes/watchlist"));
 app.use("/artwork", require("./routes/artwork"));
+app.use("/profile", require("./routes/profile"));
+app.use("/social", require("./routes/social"));
 
 async function migrate() {
   const sql = fs.readFileSync(path.join(__dirname, "db", "schema.sql"), "utf8");

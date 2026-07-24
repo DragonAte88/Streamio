@@ -6,6 +6,7 @@ export default function Register() {
   const { register } = useAuth();
   const nav = useNavigate();
   const [displayName, setDisplayName] = useState("");
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -16,8 +17,8 @@ export default function Register() {
     setError(null);
     setBusy(true);
     try {
-      await register(email, password, displayName || undefined);
-      nav("/home");
+      await register(email, password, displayName || undefined, username || undefined);
+      nav("/setup");
     } catch (err: any) {
       setError(err.message || "Registration failed");
     } finally {
@@ -36,6 +37,10 @@ export default function Register() {
           <div className="field">
             <label>Display name</label>
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} autoFocus />
+          </div>
+          <div className="field">
+            <label>Username</label>
+            <input value={username} onChange={(e) => setUsername(e.target.value.replace(/\s/g, ""))} placeholder="unique, no spaces" />
           </div>
           <div className="field">
             <label>Email</label>
