@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Channel } from "../lib/playlist";
+import { useSettings } from "../lib/SettingsContext";
 
 function fmt(sec: number | null | undefined) {
   if (sec == null || !isFinite(sec)) return "--:--";
@@ -10,13 +11,14 @@ function fmt(sec: number | null | undefined) {
 }
 
 export default function PlayerView({ channel, onClose }: { channel: Channel; onClose: () => void }) {
+  const { settings } = useSettings();
   const areaRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const [paused, setPaused] = useState(false);
   const [timePos, setTimePos] = useState<number | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [cacheSecs, setCacheSecs] = useState<number | null>(null);
-  const [volume, setVolume] = useState(100);
+  const [volume, setVolume] = useState(settings.defaultVolume);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -36,8 +38,9 @@ export default function PlayerView({ channel, onClose }: { channel: Channel; onC
         });
         offExit = window.player.onExit(() => setError("Playback engine exited unexpectedly."));
         await window.player.load(channel.url);
+        await window.player.setVolume(settings.defaultVolume);
         setReady(true);
-        window.discord.setWatching(channel.name);
+        if (settings.discordRpcEnabled) window.discord.setWatching(channel.name);
       } catch (e: any) {
         setError(e?.message || String(e));
       }

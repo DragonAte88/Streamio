@@ -1,106 +1,82 @@
-import React, { useEffect, useMemo, useState } from "react";
-import Sidebar, { NavKey } from "./components/Sidebar";
-import HeroBanner from "./components/HeroBanner";
-import ContentRow from "./components/ContentRow";
-import PlayerView from "./components/PlayerView";
-import { Channel, groupChannels, parseM3U } from "./lib/playlist";
-import { DEMO_M3U } from "./lib/demoPlaylist";
-import { fetchCatalog } from "./lib/api";
+import React from "react";
+import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "./lib/auth";
+import { SettingsProvider } from "./lib/SettingsContext";
+import { CatalogProvider } from "./lib/CatalogContext";
+import { PlaybackProvider } from "./lib/PlaybackContext";
+
+import Layout from "./components/Layout";
+import Login from "./pages/Login";
+import Register from "./pages/Register";
+import Home from "./pages/Home";
+import LiveTV from "./pages/LiveTV";
+import Search from "./pages/Search";
+import MyList from "./pages/MyList";
+import Playlists from "./pages/Playlists";
+import PlaylistAdd from "./pages/PlaylistAdd";
+import Settings from "./pages/Settings";
+import General from "./pages/settings/General";
+import Playback from "./pages/settings/Playback";
+import Appearance from "./pages/settings/Appearance";
+import Account from "./pages/settings/Account";
+import Backend from "./pages/settings/Backend";
+import Discord from "./pages/settings/Discord";
+import Subtitles from "./pages/settings/Subtitles";
+import Audio from "./pages/settings/Audio";
+import Parental from "./pages/settings/Parental";
+import Notifications from "./pages/settings/Notifications";
+import Shortcuts from "./pages/settings/Shortcuts";
+import About from "./pages/settings/About";
+import Placeholder from "./pages/Placeholder";
+import { PLACEHOLDER_ROUTES } from "./lib/navConfig";
 
 export default function App() {
-  const [nav, setNav] = useState<NavKey>("home");
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [playing, setPlaying] = useState<Channel | null>(null);
-  const [query, setQuery] = useState("");
-  const [source, setSource] = useState<"backend" | "demo" | null>(null);
-
-  useEffect(() => {
-    fetchCatalog()
-      .then((apiChannels) => {
-        if (apiChannels.length === 0) throw new Error("empty catalog");
-        setChannels(
-          apiChannels.map((c) => ({
-            id: String(c.id),
-            name: c.name,
-            url: c.url,
-            logo: c.logo || undefined,
-            group: c.group_name,
-            tvgId: c.tvg_id || undefined
-          }))
-        );
-        setSource("backend");
-      })
-      .catch(() => {
-        setChannels(parseM3U(DEMO_M3U));
-        setSource("demo");
-      });
-  }, []);
-
-  const groups = useMemo(() => groupChannels(channels), [channels]);
-  const featured = channels[0];
-
-  const filtered = useMemo(() => {
-    if (!query.trim()) return channels;
-    const q = query.toLowerCase();
-    return channels.filter((c) => c.name.toLowerCase().includes(q));
-  }, [channels, query]);
-
   return (
-    <div className="app-shell">
-      <Sidebar active={nav} onSelect={setNav} />
-      <div className="main-content">
-        {nav === "home" && (
-          <>
-            <HeroBanner channel={featured} onPlay={setPlaying} />
-            {groups.map((g) => (
-              <ContentRow key={g.name} title={g.name} channels={g.channels} onSelect={setPlaying} />
-            ))}
-          </>
-        )}
+    <AuthProvider>
+      <SettingsProvider>
+        <CatalogProvider>
+          <PlaybackProvider>
+            <HashRouter>
+              <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route path="/register" element={<Register />} />
 
-        {nav === "live" && (
-          <div className="row-section" style={{ paddingTop: 40 }}>
-            {groups.map((g) => (
-              <ContentRow key={g.name} title={g.name} channels={g.channels} onSelect={setPlaying} />
-            ))}
-          </div>
-        )}
+                <Route element={<Layout />}>
+                  <Route path="/" element={<Navigate to="/home" replace />} />
+                  <Route path="/home" element={<Home />} />
+                  <Route path="/live-tv" element={<LiveTV />} />
+                  <Route path="/search" element={<Search />} />
+                  <Route path="/my-list" element={<MyList />} />
+                  <Route path="/playlists" element={<Playlists />} />
+                  <Route path="/playlists/add" element={<PlaylistAdd />} />
 
-        {nav === "search" && (
-          <div className="row-section" style={{ paddingTop: 40 }}>
-            <input
-              autoFocus
-              placeholder="Search channels…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              style={{
-                width: "100%",
-                maxWidth: 480,
-                padding: "12px 16px",
-                borderRadius: 8,
-                border: "1px solid #2a2a35",
-                background: "#16161d",
-                color: "#f4f4f6",
-                fontSize: 15,
-                marginBottom: 24
-              }}
-            />
-            <ContentRow title="Results" channels={filtered} onSelect={setPlaying} />
-          </div>
-        )}
+                  <Route path="/settings" element={<Settings />}>
+                    <Route index element={<Navigate to="general" replace />} />
+                    <Route path="general" element={<General />} />
+                    <Route path="playback" element={<Playback />} />
+                    <Route path="appearance" element={<Appearance />} />
+                    <Route path="account" element={<Account />} />
+                    <Route path="backend" element={<Backend />} />
+                    <Route path="discord" element={<Discord />} />
+                    <Route path="subtitles" element={<Subtitles />} />
+                    <Route path="audio" element={<Audio />} />
+                    <Route path="parental" element={<Parental />} />
+                    <Route path="notifications" element={<Notifications />} />
+                    <Route path="shortcuts" element={<Shortcuts />} />
+                    <Route path="about" element={<About />} />
+                  </Route>
 
-        {nav === "settings" && (
-          <div className="empty-state">
-            <h2>Settings</h2>
-            <p>
-              Channel source: {source === "backend" ? "Oracle Cloud backend catalog" : source === "demo" ? "local demo playlist (backend catalog is empty or unreachable)" : "loading…"}
-            </p>
-            <p>Account login, playlist import, and backend sync UI land here in a later phase.</p>
-          </div>
-        )}
+                  {PLACEHOLDER_ROUTES.map((r) => (
+                    <Route key={r.path} path={r.path} element={<Placeholder title={r.title} description={r.description} />} />
+                  ))}
 
-        {playing && <PlayerView channel={playing} onClose={() => setPlaying(null)} />}
-      </div>
-    </div>
+                  <Route path="*" element={<Navigate to="/home" replace />} />
+                </Route>
+              </Routes>
+            </HashRouter>
+          </PlaybackProvider>
+        </CatalogProvider>
+      </SettingsProvider>
+    </AuthProvider>
   );
 }

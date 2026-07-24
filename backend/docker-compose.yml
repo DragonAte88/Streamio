@@ -21,6 +21,9 @@ services:
       PGPASSWORD: ${PGPASSWORD}
       PGDATABASE: streamio
       JWT_SECRET: ${JWT_SECRET}
+      TMDB_API_KEY: ${TMDB_API_KEY}
+      OMDB_API_KEY: ${OMDB_API_KEY}
+      FANART_API_KEY: ${FANART_API_KEY}
       PORT: 4000
     ports:
       - "127.0.0.1:4000:4000"
