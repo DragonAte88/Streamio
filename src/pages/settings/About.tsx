@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-
+import pkg from "../../../package.json";
 interface UpdaterStatus {
   state: string;
   version?: string;
@@ -50,7 +50,7 @@ export default function About() {
   return (
     <div>
       <h2>About Streamio</h2>
-      <p style={{ color: "var(--text-dim)" }}>Version 0.6.0</p>
+      <p style={{ color: "var(--text-dim)" }}>Version {pkg.version}</p>
       <p style={{ color: "var(--text-dim)" }}>Native Windows IPTV/M3U8 player built on Electron + mpv.</p>
       <p style={{ color: "var(--text-dim)" }}>
         <a href="https://github.com/DragonAte88/Streamio" style={{ color: "var(--accent)" }}>

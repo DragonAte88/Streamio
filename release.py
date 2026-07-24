@@ -7,31 +7,29 @@ ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
 
-token = os.environ.get('GITHUB_TOKEN')
+token = os.environ.get("GITHUB_TOKEN")
 if not token:
     print("No GITHUB_TOKEN found!")
     exit(1)
 
 repo = 'DragonAte88/Streamio'
-version = 'v0.6.0'
+version = 'v0.6.5'
 
-print("Creating release...")
-req = urllib.request.Request(f'https://api.github.com/repos/{repo}/releases', 
-    data=json.dumps({
-        "tag_name": version,
-        "name": f"Streamio {version}",
-        "body": "## ➕ Added\n- Added Recently Watched tab in Library to automatically track and resume recently viewed channels.\n- Formally provisioned Oracle Flex-2 for the upcoming Discord Bot and cleaned up all redundant scrapers and old Plex/Jellyfin containers.\n\nIncludes full source (Streamio-source-v0.6.0.zip) alongside the Windows installer."
-    }).encode('utf-8'),
+print("Fetching release...")
+req = urllib.request.Request(f'https://api.github.com/repos/{repo}/releases/tags/{version}', 
     headers={
         'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json',
         'Accept': 'application/vnd.github.v3+json'
     },
-    method='POST')
+    method='GET')
 
-res = urllib.request.urlopen(req, context=ctx)
-rel_data = json.loads(res.read())
-upload_url = rel_data['upload_url'].split('{')[0]
+try:
+    res = urllib.request.urlopen(req, context=ctx)
+    rel_data = json.loads(res.read())
+    upload_url = rel_data['upload_url'].split('{')[0]
+except urllib.error.HTTPError as e:
+    print(f"Error fetching release: {e}")
+    exit(1)
 
 def upload_asset(name, filepath, content_type):
     with open(filepath, 'rb') as f:
@@ -48,7 +46,5 @@ def upload_asset(name, filepath, content_type):
     print(f'Uploaded {name}')
 
 upload_asset('latest.yml', 'dist/latest.yml', 'application/x-yaml')
-upload_asset(f'Streamio-source-{version}.zip', f'Streamio-source-{version}.zip', 'application/zip')
-upload_asset(f'Streamio-Setup-0.6.0.exe', 'dist/Streamio-Setup-0.6.0.exe', 'application/octet-stream')
 
 print("Release complete!")

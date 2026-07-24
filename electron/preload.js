@@ -19,6 +19,11 @@ contextBridge.exposeInMainWorld("player", {
     ipcRenderer.on("player:mpv-exit", listener);
     return () => ipcRenderer.removeListener("player:mpv-exit", listener);
   },
+  onEndFile: (cb) => {
+    const listener = (_e, msg) => cb(msg);
+    ipcRenderer.on("player:end-file", listener);
+    return () => ipcRenderer.removeListener("player:end-file", listener);
+  },
   onBack: (cb) => {
     const listener = () => cb();
     ipcRenderer.on("player:back", listener);
@@ -65,4 +70,11 @@ contextBridge.exposeInMainWorld("updater", {
     ipcRenderer.on("updater:restart-countdown", listener);
     return () => ipcRenderer.removeListener("updater:restart-countdown", listener);
   }
+});
+
+contextBridge.exposeInMainWorld("wco", {
+  search: (query, filter) => ipcRenderer.invoke("wco:search", query, filter),
+  getEpisodes: (url) => ipcRenderer.invoke("wco:episodes", url),
+  extractVideo: (url) => ipcRenderer.invoke("wco:extract", url),
+  getList: (type) => ipcRenderer.invoke("wco:list", type)
 });

@@ -55,7 +55,6 @@ export const BROWSE_PLACEHOLDERS: { path: string; title: string; description: st
   { path: "/tv-shows", title: "TV Shows", description: "VOD/episodic catalog with season/episode browsing, using the FULL_PROJECT_DOCUMENTATION.md episode-resolution design." },
   { path: "/sports", title: "Sports", description: "Sports channel category view." },
   { path: "/news", title: "News", description: "News channel category view." },
-  { path: "/kids", title: "Kids", description: "Kids category view, intended to respect Parental Controls once ratings data exists." },
   { path: "/trending", title: "Trending", description: "Most-watched channels/content, ranked by aggregate watch_history once there's enough data to rank." },
   { path: "/new-releases", title: "New Releases", description: "Recently added catalog entries." },
   { path: "/guide", title: "Channel Guide", description: "Full EPG grid view — the M3U8Parser-style EPG data model needs to be rebuilt server-side for this." }

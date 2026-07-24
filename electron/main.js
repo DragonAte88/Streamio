@@ -5,6 +5,7 @@ const discordRpc = require("./discordRpc");
 const discordOAuth = require("./discordOAuth");
 const autoUpdaterModule = require("./autoUpdater");
 const systemStats = require("./systemStats");
+const wcoScraper = require("./wcoScraper");
 
 app.disableHardwareAcceleration();
 
@@ -136,6 +137,12 @@ app.whenReady().then(() => {
   createVideoWindow();
   createControlsWindow();
   discordRpc.init();
+  wcoScraper.init();
+
+  ipcMain.handle("wco:search", (_e, query, filter) => wcoScraper.search(query, filter));
+  ipcMain.handle("wco:episodes", (_e, url) => wcoScraper.getEpisodes(url));
+  ipcMain.handle("wco:extract", (_e, url) => wcoScraper.extractVideo(url));
+  ipcMain.handle("wco:list", (_e, type) => wcoScraper.getList(type));
 
   ipcMain.handle("discord:watching", (_e, channelName) => {
     discordRpc.setWatching(channelName);
@@ -183,6 +190,10 @@ app.whenReady().then(() => {
     mpv.on("mpv-exit", (msg) => {
       if (alive(mainWindow)) mainWindow.webContents.send("player:mpv-exit", msg);
       if (alive(controlsWindow)) controlsWindow.webContents.send("player:mpv-exit", msg);
+    });
+    mpv.on("end-file", (msg) => {
+      if (alive(mainWindow)) mainWindow.webContents.send("player:end-file", msg);
+      if (alive(controlsWindow)) controlsWindow.webContents.send("player:end-file", msg);
     });
     if (alive(controlsWindow) && meta) controlsWindow.webContents.send("player:meta", meta);
     return true;

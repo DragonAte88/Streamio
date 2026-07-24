@@ -29,6 +29,7 @@ import MyList from "./pages/MyList";
 import Playlists from "./pages/Playlists";
 import PlaylistAdd from "./pages/PlaylistAdd";
 import RecentlyWatched from "./pages/RecentlyWatched";
+import KidsShow from "./pages/KidsShow";
 import Settings from "./pages/Settings";
 import General from "./pages/settings/General";
 import Playback from "./pages/settings/Playback";
@@ -44,6 +45,9 @@ import Shortcuts from "./pages/settings/Shortcuts";
 import About from "./pages/settings/About";
 import Placeholder from "./pages/Placeholder";
 import BrowsePlaceholder from "./pages/BrowsePlaceholder";
+import Trending from "./pages/Trending";
+import DynamicCategoryList from "./pages/DynamicCategoryList";
+import { M3U_SOURCES } from "./lib/m3uFetcher";
 import { BROWSE_PLACEHOLDERS, LIBRARY_PLACEHOLDERS, SETTINGS_PLACEHOLDERS } from "./lib/navConfig";
 
 export default function App() {
@@ -64,8 +68,21 @@ export default function App() {
                   <Route path="/home" element={<Home />} />
                   <Route path="/live-tv" element={<LiveTV />} />
                   <Route path="/search" element={<Search />} />
+                  {/* Dynamic M3U Categories */}
+                  <Route path="/movies" element={<DynamicCategoryList title="Movies" urls={[{ url: M3U_SOURCES.movies, group: "Movies" }]} wcoTypes={['movie']} />} />
+                  <Route path="/tv-shows" element={<DynamicCategoryList title="TV Shows" urls={[{ url: M3U_SOURCES.animation, group: "Animation" }]} wcoTypes={['dub', 'sub']} />} />
+                  <Route path="/sports" element={<DynamicCategoryList title="Sports" urls={[{ url: M3U_SOURCES.sports, group: "Sports" }]} />} />
+                  <Route path="/news" element={<DynamicCategoryList title="News" urls={[{ url: M3U_SOURCES.news, group: "News" }]} />} />
+                  <Route path="/kids" element={<DynamicCategoryList title="Kids & Retro" urls={[
+                    { url: M3U_SOURCES.kids, group: "Kids" },
+                    { url: M3U_SOURCES.toonamiPst, group: "Toonami PST" },
+                    { url: M3U_SOURCES.toonamiEst, group: "Toonami EST" }
+                  ]} wcoTypes={['cartoon']} />} />
+                  <Route path="/kids/show" element={<KidsShow />} />
+                  <Route path="/trending" element={<Trending />} />
 
-                  {BROWSE_PLACEHOLDERS.map((r) => (
+                  {/* Leftover placeholders (New Releases, Guide) */}
+                  {BROWSE_PLACEHOLDERS.filter(r => !["/trending", "/movies", "/tv-shows", "/sports", "/news", "/kids"].includes(r.path)).map((r) => (
                     <Route key={r.path} path={r.path} element={<BrowsePlaceholder title={r.title} description={r.description} />} />
                   ))}
 

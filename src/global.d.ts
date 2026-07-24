@@ -13,6 +13,7 @@ declare global {
       setBounds: (bounds: { x: number; y: number; width: number; height: number; visible: boolean }) => void;
       onPropertyChange: (cb: (msg: any) => void) => () => void;
       onExit: (cb: (msg: any) => void) => () => void;
+      onEndFile: (cb: (msg: any) => void) => () => void;
       onBack: (cb: () => void) => () => void;
     };
     discord: {
@@ -42,6 +43,12 @@ declare global {
         cb: (status: { state: string; version?: string; percent?: number; message?: string; releaseNotes?: string }) => void
       ) => () => void;
       onRestartCountdown: (cb: (payload: { secondsLeft: number }) => void) => () => void;
+    };
+    wco: {
+      search: (query: string, filter: "dub"|"sub"|"cartoon"|"all") => Promise<{title: string, url: string}[]>;
+      getEpisodes: (url: string) => Promise<{title: string, url: string}[]>;
+      extractVideo: (url: string) => Promise<string | null>;
+      getList: (type: string) => Promise<{title: string, url: string}[]>;
     };
   }
 }

@@ -100,6 +100,25 @@ async function fanartTvLookup(tvdbId, kind) {
   }
 }
 
+async function jikanAnimeLookup(query) {
+  const url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=1`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.data && data.data.length > 0) {
+      const anime = data.data[0];
+      return {
+        poster: anime.images?.jpg?.large_image_url || anime.images?.jpg?.image_url || null,
+        title: anime.title_english || anime.title || null
+      };
+    }
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
 async function tvmazeLookup(query) {
   const url = `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(query)}`;
   try {
@@ -180,6 +199,18 @@ router.get("/search", async (req, res) => {
           if (fanart.bg && await verifyImage(fanart.bg)) {
             bgUrl = fanart.bg;
           }
+        }
+      }
+    }
+
+    // 3.5 Jikan fallback (for anime/cartoons)
+    if (!posterUrl && searchKind === "tv") {
+      const jikan = await jikanAnimeLookup(cleanedTitle);
+      if (jikan && jikan.poster && await verifyImage(jikan.poster)) {
+        posterUrl = jikan.poster;
+        source = "jikan";
+        if (!tmdbHit) {
+          tmdbHit = { name: jikan.title, id: null, overview: null };
         }
       }
     }
