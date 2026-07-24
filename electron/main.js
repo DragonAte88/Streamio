@@ -11,6 +11,7 @@ let videoWindow;
 let controlsWindow;
 let mpv;
 let lastBounds = null;
+let closing = false;
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -39,6 +40,14 @@ function createMainWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
+
+  // Fires before the native window actually tears down - flip the flag here,
+  // not in "closed", so any move/resize event that sneaks in during teardown
+  // (a real, observed race) is ignored instead of touching a half-destroyed
+  // native handle.
+  mainWindow.on("close", () => {
+    closing = true;
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -183,26 +192,32 @@ app.whenReady().then(() => {
 });
 
 function applyVideoBounds() {
-  if (!lastBounds || !alive(videoWindow) || !alive(mainWindow)) return;
-  const mb = mainWindow.getContentBounds();
-  if (lastBounds.visible) {
-    const bounds = {
-      x: mb.x + Math.round(lastBounds.x),
-      y: mb.y + Math.round(lastBounds.y),
-      width: Math.max(1, Math.round(lastBounds.width)),
-      height: Math.max(1, Math.round(lastBounds.height))
-    };
-    videoWindow.setBounds(bounds);
-    if (!videoWindow.isVisible()) videoWindow.showInactive();
+  if (closing || !lastBounds || !alive(videoWindow) || !alive(mainWindow)) return;
+  try {
+    const mb = mainWindow.getContentBounds();
+    if (lastBounds.visible) {
+      const bounds = {
+        x: mb.x + Math.round(lastBounds.x),
+        y: mb.y + Math.round(lastBounds.y),
+        width: Math.max(1, Math.round(lastBounds.width)),
+        height: Math.max(1, Math.round(lastBounds.height))
+      };
+      videoWindow.setBounds(bounds);
+      if (!videoWindow.isVisible()) videoWindow.showInactive();
 
-    if (alive(controlsWindow)) {
-      controlsWindow.setBounds(bounds);
-      if (!controlsWindow.isVisible()) controlsWindow.showInactive();
-      controlsWindow.moveTop(); // keep controls above the mpv window
+      if (alive(controlsWindow)) {
+        controlsWindow.setBounds(bounds);
+        if (!controlsWindow.isVisible()) controlsWindow.showInactive();
+        controlsWindow.moveTop(); // keep controls above the mpv window
+      }
+    } else {
+      videoWindow.hide();
+      if (alive(controlsWindow)) controlsWindow.hide();
     }
-  } else {
-    videoWindow.hide();
-    if (alive(controlsWindow)) controlsWindow.hide();
+  } catch (e) {
+    // Defensive only: isDestroyed() can lag one tick behind the native handle
+    // actually going away during teardown - never let that crash the app.
+    console.error("[applyVideoBounds] ignored error during window teardown:", e.message);
   }
 }
 
