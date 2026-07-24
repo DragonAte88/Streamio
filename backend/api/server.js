@@ -5,6 +5,7 @@ const path = require("path");
 const pool = require("./db/pool");
 
 const app = express();
+app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json());
 
@@ -23,6 +24,13 @@ app.use("/watchlist", require("./routes/watchlist"));
 app.use("/artwork", require("./routes/artwork"));
 app.use("/profile", require("./routes/profile"));
 app.use("/social", require("./routes/social"));
+app.use("/account", require("./routes/account"));
+app.use("/admin", require("./routes/admin"));
+app.use("/auth/discord", require("./routes/discord"));
+
+const { router: assetsRouter, UPLOAD_DIR } = require("./routes/assets");
+app.use("/assets", assetsRouter);
+app.use("/uploads", express.static(UPLOAD_DIR));
 
 async function migrate() {
   const sql = fs.readFileSync(path.join(__dirname, "db", "schema.sql"), "utf8");

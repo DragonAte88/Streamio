@@ -6,6 +6,7 @@ import { CatalogProvider } from "./lib/CatalogContext";
 import { PlaybackProvider } from "./lib/PlaybackContext";
 
 import Layout from "./components/Layout";
+import PersistenceHeartbeat from "./components/PersistenceHeartbeat";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Setup from "./pages/Setup";
@@ -19,6 +20,10 @@ import Requests from "./pages/social/Requests";
 import Rooms from "./pages/social/Rooms";
 import RoomDetail from "./pages/social/RoomDetail";
 import Roadmap from "./pages/social/Roadmap";
+import Invites from "./pages/social/Invites";
+import Admin from "./pages/Admin";
+import AdminUsers from "./pages/admin/AdminUsers";
+import AdminAssets from "./pages/admin/AdminAssets";
 import MyList from "./pages/MyList";
 import Playlists from "./pages/Playlists";
 import PlaylistAdd from "./pages/PlaylistAdd";
@@ -45,6 +50,7 @@ export default function App() {
       <SettingsProvider>
         <CatalogProvider>
           <PlaybackProvider>
+            <PersistenceHeartbeat />
             <HashRouter>
               <Routes>
                 <Route path="/login" element={<Login />} />
@@ -82,6 +88,13 @@ export default function App() {
                     <Route path="rooms" element={<Rooms />} />
                     <Route path="rooms/:roomId" element={<RoomDetail />} />
                     <Route path="roadmap" element={<Roadmap />} />
+                    <Route path="invites" element={<Invites />} />
+                  </Route>
+
+                  <Route path="/admin" element={<Admin />}>
+                    <Route index element={<Navigate to="users" replace />} />
+                    <Route path="users" element={<AdminUsers />} />
+                    <Route path="assets" element={<AdminAssets />} />
                   </Route>
 
                   <Route path="/settings" element={<Settings />}>

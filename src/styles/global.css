@@ -69,6 +69,51 @@ html, body, #root {
 .nav-item.active { background: var(--bg-card); color: var(--text); border-left: 2px solid var(--accent); }
 .sidebar-account { border-top: 1px solid #1f1f27; margin-top: 8px; padding-top: 16px; }
 
+.nav-badge {
+  margin-left: auto;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 1px 6px;
+  min-width: 16px;
+  text-align: center;
+}
+
+.status-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 8px;
+  background: var(--bg-card);
+  border: 1px solid #24242f;
+  border-radius: 10px;
+  overflow: hidden;
+  z-index: 20;
+}
+.status-menu-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; font-size: 13px; cursor: pointer;
+}
+.status-menu-item:hover { background: #1f1f2a; }
+
+/* Chat bubbles */
+.chat-bubble-row { display: flex; margin-bottom: 10px; }
+.chat-bubble-row.mine { justify-content: flex-end; }
+.chat-bubble {
+  max-width: 220px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-size: 13px;
+  background: #22222c;
+}
+.chat-bubble-row.mine .chat-bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.chat-bubble-row:not(.mine) .chat-bubble { border-bottom-left-radius: 4px; }
+.chat-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+.typing-indicator { font-size: 11px; color: var(--text-dim); font-style: italic; padding: 4px 16px; }
+
 /* Main content */
 .main-content { position: relative; overflow-y: auto; overflow-x: hidden; }
 .main-content::-webkit-scrollbar { width: 8px; }

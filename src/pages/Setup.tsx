@@ -10,7 +10,6 @@ export default function Setup() {
   const nav = useNavigate();
   const [step, setStep] = useState(0);
   const [displayName, setDisplayName] = useState(user?.display_name || "");
-  const [username, setUsername] = useState(user?.username || "");
   const [avatar, setAvatar] = useState(AVATAR_PRESETS[0]);
   const [bio, setBio] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +26,6 @@ export default function Setup() {
     try {
       const updated = await updateProfile(token, {
         displayName: displayName || undefined,
-        username: username || undefined,
         avatarUrl: avatar,
         bio: bio || undefined,
         onboarded: true
@@ -50,16 +48,13 @@ export default function Setup() {
         {error && <div className="form-error">{error}</div>}
 
         {step === 0 && (
-          <>
-            <div className="field">
-              <label>Display name</label>
-              <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} autoFocus />
+          <div className="field">
+            <label>Display name</label>
+            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} autoFocus />
+            <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 6 }}>
+              Your unique handle is {user.username}#{user.discriminator}
             </div>
-            <div className="field">
-              <label>Username</label>
-              <input value={username} onChange={(e) => setUsername(e.target.value.replace(/\s/g, ""))} placeholder="unique, no spaces" />
-            </div>
-          </>
+          </div>
         )}
 
         {step === 1 && (

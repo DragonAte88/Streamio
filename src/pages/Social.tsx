@@ -5,6 +5,7 @@ import SectionTabs from "../components/SectionTabs";
 const TABS = [
   { path: "/social/friends", label: "Friends" },
   { path: "/social/requests", label: "Requests" },
+  { path: "/social/invites", label: "Watch Invites" },
   { path: "/social/rooms", label: "Rooms" },
   { path: "/social/roadmap", label: "Roadmap" }
 ];

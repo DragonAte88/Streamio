@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useSettings } from "../../lib/SettingsContext";
 import { useAuth } from "../../lib/auth";
-import { updateProfile } from "../../lib/api";
+import { updateProfile, exchangeDiscordCode, unlinkDiscord } from "../../lib/api";
 import Toggle from "../../components/Toggle";
 
 export default function Discord() {
@@ -9,6 +9,8 @@ export default function Discord() {
   const { user, token, setUser } = useAuth();
   const [discordId, setDiscordId] = useState(user?.discord_user_id || "");
   const [saving, setSaving] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   const saveDiscordId = async () => {
     if (!token) return;
@@ -19,6 +21,27 @@ export default function Discord() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const connectDiscord = async () => {
+    if (!token) return;
+    setOauthBusy(true);
+    setOauthError(null);
+    try {
+      const code = await window.discord.startOAuth();
+      const updated = await exchangeDiscordCode(token, code);
+      setUser({ ...user!, ...updated });
+    } catch (e: any) {
+      setOauthError(e.message || "Discord connection failed");
+    } finally {
+      setOauthBusy(false);
+    }
+  };
+
+  const disconnectDiscord = async () => {
+    if (!token) return;
+    await unlinkDiscord(token);
+    setUser({ ...user!, discord_user_id: null, discord_username: null, discord_avatar_url: null });
   };
 
   return (
@@ -61,25 +84,46 @@ export default function Discord() {
       <h3 style={{ fontSize: 14, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 28 }}>
         Link your Discord account
       </h3>
-      <div className="setting-row">
-        <div style={{ flex: 1 }}>
-          <div className="setting-row-label">Discord User ID</div>
-          <div className="setting-row-desc">
-            Needed for friend/social features to recognize you on Discord. Enable Developer Mode in Discord
-            (Settings → Advanced), then right-click your name → Copy User ID.
+      {oauthError && <div className="form-error">{oauthError}</div>}
+      {user?.discord_user_id ? (
+        <div className="setting-row">
+          <div>
+            <div className="setting-row-label">Connected as {user.discord_username}</div>
+            <div className="setting-row-desc">Discord ID {user.discord_user_id}</div>
           </div>
+          <button className="btn btn-secondary" onClick={disconnectDiscord}>Disconnect</button>
+        </div>
+      ) : (
+        <div className="setting-row">
+          <div>
+            <div className="setting-row-label">Connect with Discord (OAuth2)</div>
+            <div className="setting-row-desc">
+              Opens Discord in your browser to authorize, then hands control back to Streamio automatically via a
+              local connection — the same flow real desktop apps use. Your Discord password is never seen by
+              Streamio.
+            </div>
+          </div>
+          <button className="btn btn-primary" onClick={connectDiscord} disabled={oauthBusy}>
+            {oauthBusy ? "Waiting for Discord…" : "Connect with Discord"}
+          </button>
+        </div>
+      )}
+
+      <details style={{ marginTop: 12 }}>
+        <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--text-dim)" }}>Or link manually by ID</summary>
+        <div style={{ marginTop: 10 }}>
           <input
             type="text"
             value={discordId}
             onChange={(e) => setDiscordId(e.target.value)}
             placeholder="e.g. 673973436967550976"
-            style={{ width: "100%", marginTop: 8 }}
+            style={{ width: "100%", marginBottom: 8 }}
           />
+          <button className="btn btn-secondary" onClick={saveDiscordId} disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </button>
         </div>
-      </div>
-      <button className="btn btn-primary" onClick={saveDiscordId} disabled={saving}>
-        {saving ? "Saving…" : "Save"}
-      </button>
+      </details>
 
       <h3 style={{ fontSize: 14, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 28 }}>
         Voice — what's actually possible

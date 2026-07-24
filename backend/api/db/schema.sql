@@ -6,11 +6,35 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT UNIQUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarded BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_user_id TEXT;
+
+-- Unique account identifier: "username#discriminator" (Discord-style), e.g. Bob#0001.
+-- Two users CAN share a username as long as the (username, discriminator) pair is unique.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS discriminator TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_username_discriminator_key') THEN
+    ALTER TABLE users ADD CONSTRAINT users_username_discriminator_key UNIQUE (username, discriminator);
+  END IF;
+END $$;
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_url TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS accent_color TEXT DEFAULT '#e6392f';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_show_activity BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_allow_friend_requests BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'online'; -- online|idle|dnd|invisible|offline
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'; -- user|admin
+ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_reason TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_access_token TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_refresh_token TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_username TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_avatar_url TEXT;
 
 CREATE TABLE IF NOT EXISTS channels (
   id SERIAL PRIMARY KEY,
@@ -87,3 +111,45 @@ CREATE TABLE IF NOT EXISTS direct_messages (
   body TEXT NOT NULL,
   sent_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Read receipts: last message id a user has read, per room and per DM thread
+CREATE TABLE IF NOT EXISTS room_reads (
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_read_message_id INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (room_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS dm_reads (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  other_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_read_message_id INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, other_user_id)
+);
+
+-- Invite a friend to a room/channel ("Invite <friend> to watch ___")
+CREATE TABLE IF NOT EXISTS room_invites (
+  id SERIAL PRIMARY KEY,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  from_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | declined
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Uploaded media assets (admin/permitted-user uploads), independently of whether
+-- they've been published into the channel catalog.
+CREATE TABLE IF NOT EXISTS assets (
+  id SERIAL PRIMARY KEY,
+  uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  url TEXT NOT NULL,
+  kind TEXT NOT NULL, -- video|audio|image
+  title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'Uncategorized', -- e.g. Movies, TV Shows, Live TV
+  published_channel_id INTEGER REFERENCES channels(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Grants non-admin users permission to upload media assets
+ALTER TABLE users ADD COLUMN IF NOT EXISTS can_upload_assets BOOLEAN NOT NULL DEFAULT false;

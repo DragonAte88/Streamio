@@ -9,15 +9,43 @@ export interface ApiChannel {
   group_name: string;
 }
 
+export type PresenceStatus = "online" | "idle" | "dnd" | "invisible" | "offline";
+
 export interface ApiUser {
   id: number;
   email: string;
   display_name: string | null;
   username: string | null;
+  discriminator: string | null;
   avatar_url: string | null;
+  banner_url: string | null;
+  accent_color: string | null;
   bio: string | null;
   onboarded: boolean;
+  status: PresenceStatus;
+  role: "user" | "admin";
+  can_upload_assets: boolean;
+  suspended: boolean;
+  suspended_reason?: string | null;
   discord_user_id: string | null;
+  discord_username?: string | null;
+  discord_avatar_url?: string | null;
+  privacy_show_activity?: boolean;
+  privacy_allow_friend_requests?: boolean;
+}
+
+export interface ApiAsset {
+  id: number;
+  uploader_id: number;
+  username: string;
+  discriminator: string;
+  filename: string;
+  url: string;
+  kind: "video" | "audio" | "image";
+  title: string;
+  category: string;
+  published_channel_id: number | null;
+  created_at: string;
 }
 
 function authHeaders(token: string) {
@@ -41,14 +69,46 @@ export async function register(email: string, password: string, displayName?: st
   return res.json();
 }
 
+export class SuspendedAccountError extends Error {
+  reactivateToken: string;
+  user: ApiUser;
+  constructor(reactivateToken: string, user: ApiUser) {
+    super("account suspended");
+    this.reactivateToken = reactivateToken;
+    this.user = user;
+  }
+}
+
 export async function login(email: string, password: string) {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password })
   });
+  if (res.status === 423) {
+    const data = await res.json();
+    throw new SuspendedAccountError(data.suspendedReactivateToken, data.user);
+  }
   if (!res.ok) throw new Error((await res.json()).error || `login failed: ${res.status}`);
   return res.json();
+}
+
+export async function reactivateAccount(reactivateToken: string) {
+  const res = await fetch(`${API_BASE}/account/reactivate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: reactivateToken })
+  });
+  if (!res.ok) throw new Error((await res.json()).error || `reactivate failed: ${res.status}`);
+  return res.json();
+}
+
+export async function suspendMyAccount(token: string, reason?: string) {
+  await fetch(`${API_BASE}/account/suspend`, { method: "POST", headers: authHeaders(token), body: JSON.stringify({ reason }) });
+}
+
+export async function wipeMyAccount(token: string) {
+  await fetch(`${API_BASE}/account/wipe`, { method: "DELETE", headers: authHeaders(token) });
 }
 
 export async function addChannel(
@@ -84,16 +144,119 @@ export async function recordHistory(token: string, channelId: string) {
 
 // --- Profile ---
 
-export async function updateProfile(token: string, patch: Partial<{ displayName: string; username: string; avatarUrl: string; bio: string; onboarded: boolean; discordUserId: string }>): Promise<ApiUser> {
+export async function updateProfile(
+  token: string,
+  patch: Partial<{
+    displayName: string;
+    avatarUrl: string;
+    bannerUrl: string;
+    accentColor: string;
+    bio: string;
+    onboarded: boolean;
+    discordUserId: string;
+    privacyShowActivity: boolean;
+    privacyAllowFriendRequests: boolean;
+  }>
+): Promise<ApiUser> {
   const res = await fetch(`${API_BASE}/profile/me`, { method: "PATCH", headers: authHeaders(token), body: JSON.stringify(patch) });
   if (!res.ok) throw new Error((await res.json()).error || `profile update failed: ${res.status}`);
   return (await res.json()).user;
+}
+
+export async function fetchUserProfile(token: string, userId: number): Promise<ApiUser> {
+  const res = await fetch(`${API_BASE}/profile/${userId}`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error(`profile fetch failed: ${res.status}`);
+  return (await res.json()).user;
+}
+
+export async function setPresence(token: string, status: PresenceStatus) {
+  await fetch(`${API_BASE}/profile/presence`, { method: "POST", headers: authHeaders(token), body: JSON.stringify({ status }) });
 }
 
 export async function searchUsers(token: string, q: string) {
   const res = await fetch(`${API_BASE}/profile/search?q=${encodeURIComponent(q)}`, { headers: authHeaders(token) });
   if (!res.ok) throw new Error(`user search failed: ${res.status}`);
   return (await res.json()).users;
+}
+
+// --- Discord OAuth ---
+
+export async function exchangeDiscordCode(token: string, code: string) {
+  const res = await fetch(`${API_BASE}/auth/discord/callback`, { method: "POST", headers: authHeaders(token), body: JSON.stringify({ code }) });
+  if (!res.ok) throw new Error((await res.json()).error || `Discord link failed: ${res.status}`);
+  return (await res.json()).user;
+}
+
+export async function unlinkDiscord(token: string) {
+  await fetch(`${API_BASE}/auth/discord/unlink`, { method: "POST", headers: authHeaders(token) });
+}
+
+// --- Admin ---
+
+export async function adminListUsers(token: string) {
+  const res = await fetch(`${API_BASE}/admin/users`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error(`admin list failed: ${res.status}`);
+  return (await res.json()).users;
+}
+
+export async function adminSuspendUser(token: string, userId: number, reason?: string) {
+  await fetch(`${API_BASE}/admin/users/${userId}/suspend`, { method: "POST", headers: authHeaders(token), body: JSON.stringify({ reason }) });
+}
+
+export async function adminUnsuspendUser(token: string, userId: number) {
+  await fetch(`${API_BASE}/admin/users/${userId}/unsuspend`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function adminDeleteUser(token: string, userId: number) {
+  await fetch(`${API_BASE}/admin/users/${userId}`, { method: "DELETE", headers: authHeaders(token) });
+}
+
+export async function adminGrantUpload(token: string, userId: number) {
+  await fetch(`${API_BASE}/admin/users/${userId}/grant-upload`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function adminRevokeUpload(token: string, userId: number) {
+  await fetch(`${API_BASE}/admin/users/${userId}/revoke-upload`, { method: "POST", headers: authHeaders(token) });
+}
+
+// --- Assets ---
+
+export async function fetchAssets(token: string): Promise<ApiAsset[]> {
+  const res = await fetch(`${API_BASE}/assets`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error(`assets fetch failed: ${res.status}`);
+  return (await res.json()).assets;
+}
+
+export async function uploadAsset(token: string, file: File, title: string, category: string, onProgress?: (pct: number) => void): Promise<ApiAsset> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("title", title);
+  form.append("category", category);
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/assets`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText).asset);
+      else reject(new Error(`upload failed: ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error("upload failed"));
+    xhr.send(form);
+  });
+}
+
+export async function updateAsset(token: string, assetId: number, patch: Partial<{ title: string; category: string; publish: boolean }>): Promise<ApiAsset> {
+  const res = await fetch(`${API_BASE}/assets/${assetId}`, { method: "PATCH", headers: authHeaders(token), body: JSON.stringify(patch) });
+  if (!res.ok) throw new Error(`asset update failed: ${res.status}`);
+  return (await res.json()).asset;
+}
+
+export async function deleteAsset(token: string, assetId: number) {
+  await fetch(`${API_BASE}/assets/${assetId}`, { method: "DELETE", headers: authHeaders(token) });
 }
 
 // --- Social: friends ---
@@ -168,4 +331,42 @@ export async function fetchRoomMessages(token: string, roomId: number) {
 export async function sendRoomMessage(token: string, roomId: number, body: string) {
   const res = await fetch(`${API_BASE}/social/rooms/${roomId}/messages`, { method: "POST", headers: authHeaders(token), body: JSON.stringify({ body }) });
   return (await res.json()).message;
+}
+
+export async function markRoomRead(token: string, roomId: number, messageId: number) {
+  await fetch(`${API_BASE}/social/rooms/${roomId}/read`, { method: "POST", headers: authHeaders(token), body: JSON.stringify({ messageId }) });
+}
+
+export async function fetchRoomReads(token: string, roomId: number) {
+  const res = await fetch(`${API_BASE}/social/rooms/${roomId}/reads`, { headers: authHeaders(token) });
+  return (await res.json()).reads;
+}
+
+export async function sendTyping(token: string, roomId: number) {
+  await fetch(`${API_BASE}/social/rooms/${roomId}/typing`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function fetchTyping(token: string, roomId: number) {
+  const res = await fetch(`${API_BASE}/social/rooms/${roomId}/typing`, { headers: authHeaders(token) });
+  return (await res.json()).typing;
+}
+
+// --- Invite to watch ---
+
+export async function inviteToRoom(token: string, roomId: number, toUserId: number) {
+  await fetch(`${API_BASE}/social/rooms/${roomId}/invite/${toUserId}`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function fetchInvites(token: string) {
+  const res = await fetch(`${API_BASE}/social/invites`, { headers: authHeaders(token) });
+  return (await res.json()).invites;
+}
+
+export async function acceptInvite(token: string, inviteId: number): Promise<{ roomId: number }> {
+  const res = await fetch(`${API_BASE}/social/invites/${inviteId}/accept`, { method: "POST", headers: authHeaders(token) });
+  return res.json();
+}
+
+export async function declineInvite(token: string, inviteId: number) {
+  await fetch(`${API_BASE}/social/invites/${inviteId}/decline`, { method: "POST", headers: authHeaders(token) });
 }

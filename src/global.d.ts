@@ -17,6 +17,13 @@ declare global {
     discord: {
       setWatching: (channelName: string) => Promise<void>;
       clear: () => Promise<void>;
+      startOAuth: () => Promise<string>;
+    };
+    updater: {
+      check: () => Promise<void>;
+      download: () => Promise<void>;
+      install: () => Promise<void>;
+      onStatus: (cb: (status: { state: string; version?: string; percent?: number; message?: string }) => void) => () => void;
     };
   }
 }

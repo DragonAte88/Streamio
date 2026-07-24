@@ -24,9 +24,14 @@ services:
       TMDB_API_KEY: ${TMDB_API_KEY}
       OMDB_API_KEY: ${OMDB_API_KEY}
       FANART_API_KEY: ${FANART_API_KEY}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
+      DISCORD_REDIRECT_URI: ${DISCORD_REDIRECT_URI}
       PORT: 4000
     ports:
       - "127.0.0.1:4000:4000"
+    volumes:
+      - uploads:/app/uploads
     networks: [internal]
 
 networks:
@@ -34,3 +39,4 @@ networks:
 
 volumes:
   pgdata:
+  uploads:

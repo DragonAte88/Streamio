@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 const { MpvController } = require("./mpvController");
 const discordRpc = require("./discordRpc");
+const discordOAuth = require("./discordOAuth");
+const autoUpdaterModule = require("./autoUpdater");
 
 let mainWindow;
 let videoWindow;
@@ -65,6 +67,14 @@ app.whenReady().then(() => {
   ipcMain.handle("discord:clear", () => {
     discordRpc.clear();
   });
+  ipcMain.handle("discord:oauth:start", async () => {
+    return discordOAuth.startOAuthFlow();
+  });
+
+  const updater = autoUpdaterModule.init(mainWindow);
+  ipcMain.handle("updater:check", () => updater.check());
+  ipcMain.handle("updater:download", () => updater.download());
+  ipcMain.handle("updater:install", () => updater.installNow());
 
   ipcMain.handle("player:start", async () => {
     if (mpv) mpv.stop();
