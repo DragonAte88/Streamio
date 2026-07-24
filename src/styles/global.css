@@ -203,7 +203,8 @@ html, body, #root {
 .card-group { position: absolute; top: 8px; left: 10px; font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
 
 /* Player */
-.player-view { position: absolute; inset: 0; background: #000; display: flex; flex-direction: column; z-index: 10; }
+.player-view { position: fixed; inset: 0; background: #000; display: flex; flex-direction: column; z-index: 10; }
+.main-content.player-open { overflow: hidden; }
 .video-area { flex: 1; position: relative; }
 .player-topbar {
   position: absolute; top: 0; left: 0; right: 0;

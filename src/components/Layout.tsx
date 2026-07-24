@@ -102,7 +102,7 @@ export default function Layout() {
         </div>
       </div>
 
-      <div className="main-content">
+      <div className={"main-content" + (playing ? " player-open" : "")}>
         <Outlet />
         {playing && <PlayerView channel={playing} onClose={close} />}
       </div>

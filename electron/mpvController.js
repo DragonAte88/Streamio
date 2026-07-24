@@ -1,9 +1,11 @@
 const { spawn } = require("child_process");
 const net = require("net");
 const path = require("path");
+const os = require("os");
 
 const PIPE_NAME = "\\\\.\\pipe\\streamio-mpvsocket";
 const MPV_PATH = process.env.MPV_PATH || "C:\\Program Files\\MPV Player\\mpv.exe";
+const MPV_LOG_PATH = path.join(os.tmpdir(), "streamio-mpv.log");
 
 class MpvController {
   constructor() {
@@ -35,6 +37,11 @@ class MpvController {
       // embedding on Windows.
       "--vo=gpu",
       "--gpu-context=d3d11",
+      // Verbose vo/gpu diagnostics written to a fixed, known path so a real
+      // rendering failure can be read back afterward instead of guessed at -
+      // this file is overwritten (not appended) on every new stream load.
+      `--log-file=${MPV_LOG_PATH}`,
+      "--msg-level=all=v,vo=trace,gpu=trace,cplayer=v",
       "--cache=yes",
       "--cache-secs=10",
       "--demuxer-max-bytes=50MiB",
@@ -166,4 +173,4 @@ class MpvController {
   }
 }
 
-module.exports = { MpvController, MPV_PATH };
+module.exports = { MpvController, MPV_PATH, MPV_LOG_PATH };
