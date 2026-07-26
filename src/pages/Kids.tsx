@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import WcoCard from "../components/WcoCard";
 
 type WCOResult = { title: string; url: string };
 
@@ -90,19 +91,15 @@ export default function Kids() {
         {results.length > 0 && (
           <div>
             <div className="row-title">Search Results ({results.length})</div>
-            <div className="row-scroll" style={{ flexWrap: "wrap", overflow: "visible" }}>
+            <div className="row-scroll" style={{ flexWrap: "wrap", overflow: "visible", gap: 12, paddingBottom: 12 }}>
               {results.map((r, i) => (
-                <div
+                <WcoCard
                   key={i}
-                  className="card"
+                  title={r.title}
+                  url={r.url}
+                  kind="tv"
                   onClick={() => handleShowClick(r)}
-                  style={{ width: 180, height: 260, backgroundColor: "var(--bg-card)" }}
-                >
-                  <div className="card-group" style={{ whiteSpace: 'normal', display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', marginTop: 'auto', paddingBottom: 30 }}>
-                    {r.title}
-                  </div>
-                  <div className="card-label">View Episodes</div>
-                </div>
+                />
               ))}
             </div>
           </div>

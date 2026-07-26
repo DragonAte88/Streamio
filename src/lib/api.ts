@@ -59,6 +59,30 @@ export async function fetchCatalog(): Promise<ApiChannel[]> {
   return data.channels;
 }
 
+export interface ArtworkResult {
+  title: string;
+  resolvedName: string | null;
+  poster: string | null;
+  background: string | null;
+  overview: string | null;
+  source: string | null;
+}
+
+/** Fetch artwork (poster, backdrop, overview) for a title via the backend proxy.
+ *  kind: "tv" (default) or "movie" */
+export async function fetchArtwork(title: string, kind: "tv" | "movie" = "tv"): Promise<ArtworkResult | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/artwork/search?title=${encodeURIComponent(title)}&kind=${kind}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function register(email: string, password: string, displayName?: string, username?: string) {
   const res = await fetch(`${API_BASE}/auth/register`, {
     method: "POST",

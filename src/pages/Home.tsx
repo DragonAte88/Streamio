@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import HeroBanner from "../components/HeroBanner";
 import ContentRow from "../components/ContentRow";
+import WcoCard from "../components/WcoCard";
 import SectionTabs from "../components/SectionTabs";
 import FilterBar, { applyFilters, FilterState } from "../components/FilterBar";
 import { useCatalog } from "../lib/CatalogContext";
@@ -52,35 +53,51 @@ export default function Home() {
           <HeroBanner channel={featured} onPlay={play} />
           
           {wcoCartoons.length > 0 && (
-            <ContentRow 
-              title="Popular Cartoons (On Demand)" 
-              channels={wcoCartoons.map((c, i) => ({ id: `wco-c-${i}`, name: c.title, url: c.url, group: "Cartoon" }))} 
-              onSelect={(ch) => navigate("/kids/show", { state: { title: ch.name, url: ch.url } })} 
-            />
+            <div className="row-section">
+              <div className="row-title">Popular Cartoons (On Demand)</div>
+              <div className="row-scroll" style={{ gap: 12 }}>
+                {wcoCartoons.map((c, i) => (
+                  <WcoCard key={`wco-c-${i}`} title={c.title} url={c.url} kind="tv"
+                    onClick={() => navigate("/kids/show", { state: { title: c.title, url: c.url } })} />
+                ))}
+              </div>
+            </div>
           )}
 
           {wcoDubs.length > 0 && (
-            <ContentRow 
-              title="Dubbed Anime (On Demand)" 
-              channels={wcoDubs.map((c, i) => ({ id: `wco-d-${i}`, name: c.title, url: c.url, group: "Anime Dub" }))} 
-              onSelect={(ch) => navigate("/kids/show", { state: { title: ch.name, url: ch.url } })} 
-            />
+            <div className="row-section">
+              <div className="row-title">Dubbed Anime (On Demand)</div>
+              <div className="row-scroll" style={{ gap: 12 }}>
+                {wcoDubs.map((c, i) => (
+                  <WcoCard key={`wco-d-${i}`} title={c.title} url={c.url} kind="tv"
+                    onClick={() => navigate("/kids/show", { state: { title: c.title, url: c.url } })} />
+                ))}
+              </div>
+            </div>
           )}
 
           {wcoSubs.length > 0 && (
-            <ContentRow 
-              title="Subbed Anime (On Demand)" 
-              channels={wcoSubs.map((c, i) => ({ id: `wco-s-${i}`, name: c.title, url: c.url, group: "Anime Sub" }))} 
-              onSelect={(ch) => navigate("/kids/show", { state: { title: ch.name, url: ch.url } })} 
-            />
+            <div className="row-section">
+              <div className="row-title">Subbed Anime (On Demand)</div>
+              <div className="row-scroll" style={{ gap: 12 }}>
+                {wcoSubs.map((c, i) => (
+                  <WcoCard key={`wco-s-${i}`} title={c.title} url={c.url} kind="tv"
+                    onClick={() => navigate("/kids/show", { state: { title: c.title, url: c.url } })} />
+                ))}
+              </div>
+            </div>
           )}
 
           {wcoMovies.length > 0 && (
-            <ContentRow 
-              title="Movies (On Demand)" 
-              channels={wcoMovies.map((c, i) => ({ id: `wco-m-${i}`, name: c.title, url: c.url, group: "Movie" }))} 
-              onSelect={(ch) => navigate("/kids/show", { state: { title: ch.name, url: ch.url } })} 
-            />
+            <div className="row-section">
+              <div className="row-title">Movies (On Demand)</div>
+              <div className="row-scroll" style={{ gap: 12 }}>
+                {wcoMovies.map((c, i) => (
+                  <WcoCard key={`wco-m-${i}`} title={c.title} url={c.url} kind="movie"
+                    onClick={() => navigate("/kids/show", { state: { title: c.title, url: c.url } })} />
+                ))}
+              </div>
+            </div>
           )}
 
           {groups.map((g) => (

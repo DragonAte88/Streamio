@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useCatalog } from "../lib/CatalogContext";
 import { usePlayback } from "../lib/PlaybackContext";
 import FilterBar, { FilterState } from "../components/FilterBar";
+import WcoCard from "../components/WcoCard";
 
 export default function Search() {
   const { channels, groups, loading } = useCatalog();
@@ -78,18 +79,20 @@ export default function Search() {
           ))}
 
           {/* WCO Anime / Cartoon Results */}
-          {wcoResults.map((wco, idx) => (
-            <div 
-              key={`wco-${idx}`} 
-              className="card" 
-              onClick={() => {
-                navigate("/kids/show", { state: { title: wco.title, url: wco.url } });
-              }}
-            >
-              <div className="card-group">On-Demand</div>
-              <div className="card-label">{wco.title}</div>
-            </div>
-          ))}
+          {wcoResults.length > 0 && (
+            <>
+              <div style={{ width: "100%", padding: "12px 0 4px", fontWeight: 700, fontSize: 13, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 0.5 }}>VOD Library</div>
+              {wcoResults.map((wco, idx) => (
+                <WcoCard
+                  key={`wco-${idx}`}
+                  title={wco.title}
+                  url={wco.url}
+                  kind="tv"
+                  onClick={() => navigate("/kids/show", { state: { title: wco.title, url: wco.url } })}
+                />
+              ))}
+            </>
+          )}
         </div>
       )}
 
