@@ -1,398 +1,449 @@
-const { BrowserWindow } = require("electron");
+const { BrowserWindow, session } = require("electron");
+
+// ─── Config ────────────────────────────────────────────────────────────────────
+
+const BASE_URL   = "https://www.wcostream.tv";
+const SEARCH_URL = `${BASE_URL}/?s=`; // GET-based search - more reliable than POST
+
+// Longer waits - WCO is behind Cloudflare and loads slowly
+const NAV_SETTLE_MS   = 5000;  // Wait after navigation before polling
+const POLL_INTERVAL   = 600;   // Between DOM polls
+const EPISODE_TIMEOUT = 20000; // Max time to find episodes
+const SEARCH_TIMEOUT  = 15000; // Max time to find search results
+const VIDEO_TIMEOUT   = 25000; // Max time to intercept stream URL
+
+// ─── Window management ─────────────────────────────────────────────────────────
 
 let scraperWin = null;
-const BASE_URL = "https://www.wcostream.tv";
-
-// How long to wait (ms) for DOM elements to appear after navigation
-const PAGE_WAIT_MS = 8000;
-const ELEM_POLL_INTERVAL = 300;
+let navigating = false;
 
 function init() {
-  if (scraperWin) return;
+  if (scraperWin && !scraperWin.isDestroyed()) return;
+
   scraperWin = new BrowserWindow({
     show: false,
+    width: 1280,
+    height: 800,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      offscreen: true,
-      // Grant same-origin fetch access to wcostream.tv pages
-    }
+      webSecurity: true,
+      // Use a persistent session so Cloudflare cookies persist between calls
+      partition: "persist:wco-scraper",
+    },
   });
 
-  scraperWin.on("closed", () => {
-    scraperWin = null;
-  });
+  scraperWin.on("closed", () => { scraperWin = null; });
 
-  // Warm up - load base URL to pass any initial CF gate
+  // Warm-up: load the base page to acquire Cloudflare clearance cookie
+  console.log("[wcoScraper] Warming up scraper window…");
   scraperWin.loadURL(BASE_URL).catch(() => {});
 }
 
+function destroy() {
+  if (!scraperWin) return;
+  try { if (!scraperWin.isDestroyed()) scraperWin.destroy(); } catch {}
+  scraperWin = null;
+}
+
+function ensureWindow() {
+  if (!scraperWin || scraperWin.isDestroyed()) init();
+}
+
+// ─── Navigation helper ─────────────────────────────────────────────────────────
+
 /**
- * Wait for a CSS selector to appear in the page DOM (polling).
- * Returns the list of matching elements as serialized objects, or [] on timeout.
+ * Navigate to a URL and wait for the page to stop loading + settle.
+ * Returns false if Cloudflare blocked us (challenge page detected).
  */
-async function waitForSelector(selector, timeoutMs = PAGE_WAIT_MS) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const found = await scraperWin.webContents.executeJavaScript(`
-      (function() {
-        const els = document.querySelectorAll(${JSON.stringify(selector)});
-        return els.length;
-      })();
-    `).catch(() => 0);
-    if (found > 0) return true;
-    await new Promise(r => setTimeout(r, ELEM_POLL_INTERVAL));
+async function navigateTo(url, settleMs = NAV_SETTLE_MS) {
+  ensureWindow();
+  navigating = true;
+
+  try {
+    await scraperWin.loadURL(url);
+  } catch (err) {
+    if (!err.message?.includes("ERR_ABORTED")) {
+      console.warn("[wcoScraper] loadURL warning:", err.message);
+    }
   }
-  return false;
+
+  // Always wait for settle regardless of loadURL success/failure
+  await sleep(settleMs);
+  navigating = false;
+
+  // Detect Cloudflare challenge page
+  const isCF = await scraperWin.webContents.executeJavaScript(`
+    !!(document.querySelector('#challenge-form') ||
+       document.title.includes('Just a moment') ||
+       document.title.includes('Checking your browser'))
+  `).catch(() => false);
+
+  if (isCF) {
+    console.warn("[wcoScraper] Cloudflare challenge detected — waiting extra 8s…");
+    await sleep(8000);
+  }
+
+  return true;
+}
+
+// ─── DOM helpers ───────────────────────────────────────────────────────────────
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
 }
 
 /**
- * Extract items from the current page using multiple selector fallbacks.
- * selectorGroups: array of { container, link } pairs to try in order.
- * Returns array of { title, url }.
+ * Poll until the JS expression returns a truthy value or timeout.
  */
-async function extractLinks(selectorGroups) {
-  const code = `
+async function pollUntil(jsExpr, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const val = await scraperWin.webContents.executeJavaScript(jsExpr).catch(() => null);
+    if (val) return val;
+    await sleep(POLL_INTERVAL);
+  }
+  return null;
+}
+
+/**
+ * Normalise a URL: handles relative paths, protocol-relative URLs, and
+ * alternate domain variants (wco.tv, watchnixtoons2, wcoforever, etc.)
+ * → always returns an absolute wcostream.tv URL.
+ */
+function normalizeUrl(href) {
+  if (!href) return null;
+  // Protocol-relative
+  if (href.startsWith("//")) href = "https:" + href;
+  // Relative path
+  if (href.startsWith("/")) href = BASE_URL + href;
+  // Rewrite alternate domains to wcostream.tv
+  href = href
+    .replace(/https?:\/\/(www\.)?(watchnixtoons2|wcoforever|wco|wcostream)\.(com|tv|net|org)/g,
+             BASE_URL);
+  // Must be an absolute http URL
+  if (!href.startsWith("http")) return null;
+  return href;
+}
+
+// ─── Cache ─────────────────────────────────────────────────────────────────────
+
+const cache = { cartoon: null, dub: null, sub: null, movie: null };
+
+// ─── Search ────────────────────────────────────────────────────────────────────
+
+/**
+ * Search for shows by navigating to WCO's search results page (GET-based).
+ * More reliable than the POST endpoint which often returns HTML fragments
+ * with relative URLs that break URL parsing.
+ */
+async function search(query, filterType = "all") {
+  ensureWindow();
+
+  const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(query)}`;
+  console.log("[wcoScraper] Searching:", searchUrl);
+
+  await navigateTo(searchUrl, NAV_SETTLE_MS);
+
+  // Extract search results — try many selectors
+  const results = await pollUntil(`
     (function() {
-      const groups = ${JSON.stringify(selectorGroups)};
-      for (const { container, link } of groups) {
-        const els = document.querySelectorAll(container + ' ' + link);
-        if (els.length > 0) {
-          return Array.from(els).map(a => ({
-            title: a.textContent.trim(),
-            url: a.href
-          })).filter(x => x.title && x.url && x.url.startsWith('http'));
+      const SELECTORS = [
+        // WCO search results page
+        '.film-poster a', '.film-poster-img + a', '.film-detail h2 a',
+        '.flw-item .film-detail .film-name a',
+        'article.item a.thumbnail', 'article a[href]',
+        // Listing grid
+        '.video-block a', '.video-block-img a',
+        '.thumb a', '.thumb-img a',
+        // Generic list
+        'ul.items li a', 'ul.item li a',
+        // Fallback: any link to an anime/cartoon/episode page
+        'a[href*="/anime/"]', 'a[href*="/cartoon/"]',
+      ];
+
+      for (const sel of SELECTORS) {
+        const els = Array.from(document.querySelectorAll(sel));
+        if (els.length === 0) continue;
+
+        const items = els.map(a => ({
+          title: (a.textContent || a.title || a.getAttribute('data-title') || '').trim(),
+          url:   a.href || a.getAttribute('href') || ''
+        })).filter(x =>
+          x.title.length > 1 &&
+          x.url &&
+          (x.url.includes('/anime/') || x.url.includes('/cartoon/') ||
+           x.url.includes('wcostream') || x.url.includes('wco') || x.url.includes('watchnixtoons'))
+        );
+
+        if (items.length > 0) {
+          console.log('[wco] search selector hit:', sel, '→', items.length);
+          return items;
         }
       }
-      // Last resort: any link that looks like a show/episode URL
-      const fallback = document.querySelectorAll('a[href*="/anime/"], a[href*="/cartoon/"], a[href*="-episode-"]');
-      if (fallback.length > 0) {
-        return Array.from(fallback).map(a => ({
-          title: a.textContent.trim(),
-          url: a.href
-        })).filter(x => x.title && x.url);
-      }
-      return [];
-    })();
-  `;
-  return await scraperWin.webContents.executeJavaScript(code).catch(() => []);
-}
+      return null; // still loading
+    })()
+  `, SEARCH_TIMEOUT);
 
-async function ensureOnSite() {
-  if (!scraperWin || scraperWin.isDestroyed()) init();
-  const url = scraperWin.webContents.getURL();
-  if (!url.startsWith(BASE_URL)) {
-    await scraperWin.loadURL(BASE_URL).catch(() => {});
-    await new Promise(r => setTimeout(r, 2000));
-  }
-}
-
-/**
- * Search for a show. Navigates the scraper window to the search results page
- * so WCO's own JS can render results, then extracts them.
- */
-async function search(query, filterType = 'all') {
-  await ensureOnSite();
-
-  // POST-based search: inject a form submit into the current wcostream.tv context
-  const searchCode = `
-    (async function() {
-      const fd = new URLSearchParams();
-      fd.append('catara', ${JSON.stringify(query)});
-      fd.append('konuara', 'series');
-      const res = await fetch('/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
-        body: fd.toString()
-      });
-      return await res.text();
-    })();
-  `;
-
-  let html = '';
-  try {
-    html = await scraperWin.webContents.executeJavaScript(searchCode);
-  } catch (err) {
-    console.error("[wcoScraper] search fetch error:", err.message);
+  if (!results || results.length === 0) {
+    // Debug dump
+    const dbg = await scraperWin.webContents.executeJavaScript(
+      `({ title: document.title, url: location.href, body: document.body.innerHTML.slice(0, 600) })`
+    ).catch(() => ({}));
+    console.log("[wcoScraper] search — 0 results. Debug:", JSON.stringify(dbg).slice(0, 400));
     return [];
   }
 
-  // Parse results from returned HTML
-  const parseCode = `
-    (function(html) {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      const results = [];
+  // Normalise URLs
+  const normalised = results
+    .map(r => ({ title: r.title, url: normalizeUrl(r.url) }))
+    .filter(r => r.url);
 
-      // Try multiple selector patterns for robustness
-      const selectors = [
-        '.cerceve .aramacerceve a',
-        '.film-poster a',
-        '.search-result a',
-        '.video-block a',
-        'div[class*="result"] a',
-        'div[class*="search"] a[href*="wcostream"]',
-        'ul.items li a',
-        '.thumb a',
-        'a[href*="/anime/"]',
-        'a[href*="/cartoon/"]',
-      ];
-
-      for (const sel of selectors) {
-        const els = doc.querySelectorAll(sel);
-        if (els.length > 0) {
-          els.forEach(a => {
-            const title = a.textContent.trim() || a.title || a.getAttribute('data-title');
-            const href = a.href || a.getAttribute('href');
-            if (title && href && href.includes('wcostream')) {
-              results.push({ title, url: href });
-            }
-          });
-          if (results.length > 0) break;
-        }
-      }
-      return results;
-    })(${JSON.stringify(html)});
-  `;
-
-  let results = [];
-  try {
-    results = await scraperWin.webContents.executeJavaScript(parseCode);
-  } catch (err) {
-    console.error("[wcoScraper] search parse error:", err.message);
-  }
-
-  if (results.length === 0) {
-    // Debug: log first 500 chars of response
-    console.log("[wcoScraper] search returned 0 results. HTML preview:", html.substring(0, 500));
-  }
+  // Deduplicate by URL
+  const seen = new Set();
+  const deduped = normalised.filter(r => {
+    if (seen.has(r.url)) return false;
+    seen.add(r.url);
+    return true;
+  });
 
   // Apply type filter
-  if (filterType === 'dub') {
-    results = results.filter(r => !r.title.toLowerCase().includes('subbed'));
-  } else if (filterType === 'sub') {
-    results = results.filter(r => !r.title.toLowerCase().includes('dubbed'));
-  } else if (filterType === 'cartoon') {
-    results = results.filter(r => {
-      const t = r.title.toLowerCase();
-      return !t.includes('subbed') && !t.includes('dubbed');
-    });
-  }
+  if (filterType === "dub")     return deduped.filter(r => !r.title.toLowerCase().includes("subbed"));
+  if (filterType === "sub")     return deduped.filter(r =>  r.title.toLowerCase().includes("subbed") || r.title.toLowerCase().includes("sub)"));
+  if (filterType === "cartoon") return deduped.filter(r => !r.title.toLowerCase().includes("subbed") && !r.title.toLowerCase().includes("dubbed"));
 
-  return results;
+  return deduped;
 }
 
+// ─── Episodes ──────────────────────────────────────────────────────────────────
+
 /**
- * Get episodes for a show. Navigates the scraper window to the show page so
- * WCO's own JavaScript can load the episode list dynamically, then extracts it.
+ * Get all episodes for a show URL.
+ * Navigates the scraper window to the show page and polls for the episode list.
  */
 async function getEpisodes(showUrl) {
-  if (!scraperWin || scraperWin.isDestroyed()) init();
+  ensureWindow();
 
-  console.log("[wcoScraper] Loading show page:", showUrl);
+  // Normalise the URL first
+  const url = normalizeUrl(showUrl) || showUrl;
+  console.log("[wcoScraper] Loading show page for episodes:", url);
 
-  try {
-    await scraperWin.loadURL(showUrl);
-  } catch (err) {
-    // Ignore navigation errors (e.g., net::ERR_ABORTED from stop())
-    if (!err.message?.includes('ERR_ABORTED')) {
-      console.error("[wcoScraper] loadURL error:", err.message);
-    }
-  }
+  await navigateTo(url, NAV_SETTLE_MS);
 
-  // Wait for the page to settle
-  await new Promise(r => setTimeout(r, 3000));
+  // Aggressively poll for episode links
+  const eps = await pollUntil(`
+    (function() {
+      const EPISODE_SELECTORS = [
+        // Primary WCO episode list containers
+        '#catlist-listview ul li a',
+        '#catlist-listview a',
+        '.cat-eps a',
+        '#episode_related a',
+        // Season/episode list variations
+        '.episodes-area a',
+        '.eplist a',
+        '.episode-list a',
+        'ul.listing.items.lists a',
+        'ul.listing a',
+        '.list-episode a',
+        // Generic containers
+        'div[id*="catlist"] a',
+        'div[class*="eps"] a',
+        'div[class*="episode"] a',
+        // Last resort
+        'a[href*="-episode-"]',
+        'a[href*="/episode/"]',
+      ];
 
-  // Try multiple episode list selectors, polling for up to 8 seconds
-  const episodeSelectors = [
-    '#catlist-listview a',         // Most common WCO selector
-    '.cat-eps a',                  // Legacy
-    '#episode_related a',          // Alternative
-    '.episodes-area a',            // Alternative  
-    'ul.listing.items.lists a',    // Some templates
-    '.list-episode a',
-    'div[class*="eps"] a',
-    'div[class*="episode"] a',
-    '.video-info-left ul a',
-    'ul.eplist a',
-  ];
+      for (const sel of EPISODE_SELECTORS) {
+        const els = Array.from(document.querySelectorAll(sel));
+        if (els.length === 0) continue;
 
-  // Poll for any episode selector to return results
-  let eps = [];
-  const deadline = Date.now() + 10000;
+        const items = els
+          .map(a => ({
+            title: (a.textContent || '').trim(),
+            url:   a.href || a.getAttribute('href') || ''
+          }))
+          .filter(x =>
+            x.title.length > 0 &&
+            x.url &&
+            // Accept any wco-related domain, not just wcostream.tv
+            (x.url.includes('wcostream') ||
+             x.url.includes('watchnixtoons') ||
+             x.url.includes('wcoforever') ||
+             x.url.includes('/anime/') ||
+             x.url.includes('/cartoon/') ||
+             x.url.includes('-episode-') ||
+             x.url.includes('/episode/'))
+          );
 
-  while (Date.now() < deadline) {
-    const code = `
-      (function() {
-        const selectors = ${JSON.stringify(episodeSelectors)};
-        for (const sel of selectors) {
-          const els = document.querySelectorAll(sel);
-          if (els.length > 0) {
-            return {
-              selector: sel,
-              items: Array.from(els).map(a => ({
-                title: a.textContent.trim(),
-                url: a.href
-              })).filter(x => x.title && x.url && x.url.includes('wcostream'))
-            };
-          }
+        if (items.length > 0) {
+          console.log('[wco] episodes selector hit:', sel, '→', items.length);
+          return items;
         }
-        return { selector: null, items: [] };
-      })();
-    `;
+      }
 
-    const result = await scraperWin.webContents.executeJavaScript(code).catch(() => ({ selector: null, items: [] }));
+      return null; // keep polling
+    })()
+  `, EPISODE_TIMEOUT);
 
-    if (result.items.length > 0) {
-      console.log(`[wcoScraper] Found ${result.items.length} episodes using selector: ${result.selector}`);
-      eps = result.items;
-      break;
-    }
-
-    await new Promise(r => setTimeout(r, 500));
+  if (!eps || eps.length === 0) {
+    const dbg = await scraperWin.webContents.executeJavaScript(
+      `({ title: document.title, url: location.href, links: Array.from(document.querySelectorAll('a[href]')).slice(0,20).map(a=>a.href) })`
+    ).catch(() => ({}));
+    console.log("[wcoScraper] No episodes found. Debug:", JSON.stringify(dbg).slice(0, 600));
+    return [];
   }
 
-  if (eps.length === 0) {
-    // Debug: dump page title and first selectors available
-    const debug = await scraperWin.webContents.executeJavaScript(`
-      ({ title: document.title, url: location.href, bodySnippet: document.body.innerHTML.substring(0, 800) })
-    `).catch(() => ({}));
-    console.log("[wcoScraper] No episodes found. Page debug:", JSON.stringify(debug).substring(0, 500));
-  }
+  // Normalise URLs
+  const normalised = eps
+    .map(e => ({ title: e.title, url: normalizeUrl(e.url) || e.url }))
+    .filter(e => e.url);
 
-  return eps.reverse(); // Chronological order
+  console.log(`[wcoScraper] getEpisodes returning ${normalised.length} episodes`);
+
+  // WCO lists newest-first; reverse for chronological playback order
+  return normalised.reverse();
 }
 
+// ─── Video extraction ──────────────────────────────────────────────────────────
+
 /**
- * Extract video stream URL from an episode page.
- * Loads the page in the scraper window and intercepts the first m3u8/mp4 request.
+ * Extract the stream URL from an episode page.
+ * Intercepts the first HLS (.m3u8) or MP4 network request.
  */
 async function extractVideo(episodeUrl) {
   return new Promise(async (resolve) => {
-    if (!scraperWin || scraperWin.isDestroyed()) init();
+    ensureWindow();
+
+    const url = normalizeUrl(episodeUrl) || episodeUrl;
+    console.log("[wcoScraper] Extracting video from:", url);
 
     let resolved = false;
+
     const timeout = setTimeout(() => {
       if (!resolved) {
         resolved = true;
         cleanup();
+        console.warn("[wcoScraper] extractVideo timed out for:", url);
         resolve(null);
       }
-    }, 20000);
+    }, VIDEO_TIMEOUT);
 
-    const requestFilter = { urls: ["*://*/*.m3u8*", "*://*/*.mp4*"] };
+    const AD_DOMAINS = ["doubleclick", "googlesyndication", "adnxs", "google-analytics",
+                        "googletagmanager", "facebook.com", "amazon-adsystem"];
+
+    const reqFilter = { urls: ["*://*/*.m3u8*", "*://*/*.mp4*", "*://*/hls/*", "*://*/stream/*"] };
 
     const handler = (details) => {
-      const url = details.url;
-      // Skip ad/tracker URLs and tiny segments
-      if ((url.includes('.m3u8') || url.includes('.mp4')) && !resolved) {
-        // Filter out obvious ad/analytics URLs
-        if (url.includes('doubleclick') || url.includes('googlesyndication') || url.includes('adnxs')) return;
+      const u = details.url;
+      if (resolved) return;
+      if (AD_DOMAINS.some(d => u.includes(d))) return;
+      // Must look like a real stream, not a tiny image/ad segment
+      if (u.includes(".m3u8") || (u.includes(".mp4") && !u.includes("thumbnail"))) {
         resolved = true;
         clearTimeout(timeout);
         cleanup();
-        scraperWin.webContents.stop();
-        resolve(url);
+        try { scraperWin.webContents.stop(); } catch {}
+        console.log("[wcoScraper] Stream URL intercepted:", u.slice(0, 80));
+        resolve(u);
       }
     };
 
     function cleanup() {
       try {
-        scraperWin.webContents.session.webRequest.onBeforeRequest(requestFilter, null);
+        scraperWin.webContents.session.webRequest.onBeforeRequest(reqFilter, null);
       } catch {}
     }
 
-    scraperWin.webContents.session.webRequest.onBeforeRequest(requestFilter, handler);
+    scraperWin.webContents.session.webRequest.onBeforeRequest(reqFilter, handler);
 
     try {
-      await scraperWin.loadURL(episodeUrl);
+      await scraperWin.loadURL(url);
     } catch (err) {
-      if (!err.message?.includes('ERR_ABORTED')) {
+      if (!err.message?.includes("ERR_ABORTED")) {
         console.error("[wcoScraper] extractVideo loadURL error:", err.message);
       }
     }
   });
 }
 
-// In-memory cache for list pages
-const cache = {
-  cartoon: null,
-  dub: null,
-  sub: null,
-  movie: null
+// ─── List pages ────────────────────────────────────────────────────────────────
+
+const LIST_PATHS = {
+  cartoon: "/cartoon-list",
+  dub:     "/dubbed-anime-list",
+  sub:     "/subbed-anime-list",
+  movie:   "/movie-list",
 };
 
 /**
- * Get the full list of shows for a given category.
- * Uses fetch() inside the WCO context to avoid a full page navigation.
+ * Fetch the full A-Z list for a category. Uses navigation (not fetch()) because
+ * WCO's list pages also require Cloudflare clearance to serve their full HTML.
  */
 async function getList(type) {
   if (cache[type]) return cache[type];
-  await ensureOnSite();
 
-  let listPath = "";
-  if (type === 'cartoon') listPath = "/cartoon-list";
-  else if (type === 'dub') listPath = "/dubbed-anime-list";
-  else if (type === 'sub') listPath = "/subbed-anime-list";
-  else if (type === 'movie') listPath = "/movie-list";
-  else throw new Error("Invalid type: " + type);
+  const path = LIST_PATHS[type];
+  if (!path) throw new Error("Invalid list type: " + type);
 
-  const code = `
-    (async function() {
-      const res = await fetch(${JSON.stringify(listPath)});
-      const html = await res.text();
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
+  ensureWindow();
+  const listUrl = BASE_URL + path;
+  console.log("[wcoScraper] Loading list page:", listUrl);
 
-      const results = [];
-      // Multiple selector fallbacks for the list pages
-      const selectors = [
+  await navigateTo(listUrl, NAV_SETTLE_MS);
+
+  const results = await pollUntil(`
+    (function() {
+      const SELECTORS = [
         'div.ddmcc ul li a',
+        '.anime_list_body ul li a',
+        '.anime_list_body li a',
         '.film-list .item a',
         '.video-block a',
         'ul.items li a',
-        '.anime_list_body li a',
         'ul.listing a',
-        'a[href*="wcostream"][href*="/anime/"]',
-        'a[href*="wcostream"][href*="/cartoon/"]',
+        'ul.item li a',
+        'a[href*="/anime/"]',
+        'a[href*="/cartoon/"]',
       ];
 
-      for (const sel of selectors) {
-        const els = doc.querySelectorAll(sel);
-        if (els.length > 0) {
-          els.forEach(a => {
-            const title = a.textContent.trim();
-            const url = a.href || a.getAttribute('href');
-            if (title && url) results.push({ title, url });
-          });
-          if (results.length > 0) break;
+      for (const sel of SELECTORS) {
+        const els = Array.from(document.querySelectorAll(sel));
+        if (els.length < 5) continue; // skip noise
+
+        const items = els.map(a => ({
+          title: a.textContent.trim(),
+          url:   a.href || a.getAttribute('href') || ''
+        })).filter(x => x.title && x.url && x.url.startsWith('http'));
+
+        if (items.length > 0) {
+          console.log('[wco] list selector hit:', sel, '→', items.length);
+          return items;
         }
       }
-      return results;
-    })();
-  `;
+      return null;
+    })()
+  `, 15000);
 
-  try {
-    const results = await scraperWin.webContents.executeJavaScript(code);
-    if (results.length > 0) {
-      cache[type] = results;
-    } else {
-      console.log(`[wcoScraper] getList('${type}') returned 0 items`);
-    }
-    return results;
-  } catch (err) {
-    console.error("[wcoScraper] getList error:", err);
+  if (!results || results.length === 0) {
+    const dbg = await scraperWin.webContents.executeJavaScript(
+      `({ title: document.title, url: location.href, count: document.querySelectorAll('a[href]').length })`
+    ).catch(() => ({}));
+    console.log(`[wcoScraper] getList('${type}') — 0 items. Debug:`, JSON.stringify(dbg));
     return [];
   }
+
+  const normalised = results
+    .map(r => ({ title: r.title, url: normalizeUrl(r.url) || r.url }))
+    .filter(r => r.url);
+
+  cache[type] = normalised;
+  console.log(`[wcoScraper] getList('${type}') → ${normalised.length} items cached`);
+  return normalised;
 }
 
-function destroy() {
-  if (!scraperWin) return;
-  try {
-    if (!scraperWin.isDestroyed()) scraperWin.destroy();
-  } catch {}
-  scraperWin = null;
-}
+// ─── Cache / refresh ───────────────────────────────────────────────────────────
 
 function clearCache() {
   cache.cartoon = null;
@@ -402,24 +453,13 @@ function clearCache() {
   console.log("[wcoScraper] Cache cleared.");
 }
 
-/**
- * Full refresh: destroy the hidden window (clearing Cloudflare cookies + session)
- * and wipe the list cache so everything re-fetches fresh.
- */
 function refresh() {
   clearCache();
   destroy();
   init();
-  console.log("[wcoScraper] Full refresh — window restarted, cache cleared.");
+  console.log("[wcoScraper] Full refresh complete.");
 }
 
-module.exports = {
-  init,
-  search,
-  getEpisodes,
-  extractVideo,
-  getList,
-  clearCache,
-  refresh,
-  destroy
-};
+// ─── Exports ───────────────────────────────────────────────────────────────────
+
+module.exports = { init, search, getEpisodes, extractVideo, getList, clearCache, refresh, destroy };
