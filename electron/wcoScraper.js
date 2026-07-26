@@ -516,6 +516,17 @@ async function fetchEpisodesDirect(showUrl) {
     const rawTitle = match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 
     if (!rawTitle || rawTitle.length < 2) continue;
+
+    // Decode HTML entities and strip quality badges (4K, HD, SD) from title
+    const cleanedTitle = rawTitle
+      .replace(/&#039;/g, "'")
+      .replace(/&amp;/g, "&")
+      .replace(/&quot;/g, '"')
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&apos;/g, "'")
+      .replace(/\s*(4K|HD|SD|FHD|UHD|1080p|720p|480p)\s*$/i, "")
+      .trim();
     // Skip navigation, category, playlist, and list links
     if (
       rawHref.includes("#") ||
@@ -540,7 +551,7 @@ async function fetchEpisodesDirect(showUrl) {
     }
 
     seen.add(norm);
-    matches.push({ title: rawTitle, url: norm });
+    matches.push({ title: cleanedTitle || rawTitle, url: norm });
   }
 
   if (matches.length > 0) {
@@ -1035,11 +1046,17 @@ async function resolveEpisodeStream(episodeUrl) {
 // ─── Phase 2: Browser Network Interception ────────────────────────────────────
 
 const STREAM_PATTERNS = [
-  u => u.includes("getvid") || u.includes("evid="),
+  u => (u.includes("getvid") || u.includes("evid=")) && !u.includes("pop-530"),
   u => u.includes(".m3u8"),
   u => u.includes(".mp4") && !u.includes("thumbnail") && !u.includes("preview") && !u.includes("1x1"),
   u => /\/hls\/|playlist\.m3u8|index\.m3u8|\/stream\/|\/video\//i.test(u),
-  u => u.includes("/getvid?") && u.includes("evid="),
+];
+
+// Embed iframe URL patterns — when matched, the extractor navigates into the embed
+const EMBED_IFRAME_PATTERNS = [
+  u => /vhs\.wcostream\.(com|tv)/.test(u) && u.includes("uuid="),
+  u => /embed\.wcostream\.(com|tv)\/inc\/embed/.test(u),
+  u => u.includes("watchnixtoons2") && u.includes("embed"),
 ];
 
 const AD_DOMAINS = [
@@ -1067,7 +1084,7 @@ async function extractVideo(episodeUrl) {
     return ajaxStream;
   }
 
-  // ── Phase 2+3+4: Browser interception + DOM deep-dive ──
+  // ── Phase 2: Browser 2-step embed navigation + network interception ──
   return new Promise(async (resolve) => {
     ensureWindow();
     let resolved = false;
@@ -1082,27 +1099,52 @@ async function extractVideo(episodeUrl) {
     }, VIDEO_TIMEOUT);
 
     const reqFilter = { urls: ["*://*/*"] };
+    let embedNavigated = false;   // True once we've loaded the embed iframe directly
+    let capturedEmbedUrl = null;  // The vhs/embed iframe URL captured from episode page
 
     const requestHandler = (details, callback) => {
       if (resolved) { callback({}); return; }
       const u = details.url;
 
-      // Block ads
+      // Block known ad domains to speed things up
       if (AD_DOMAINS.some(d => u.includes(d))) { callback({ cancel: true }); return; }
 
-      // Match stream patterns
-      if (STREAM_PATTERNS.some(fn => fn(u))) {
-        if (!u.includes("1x1") && !u.includes("pixel") && !u.includes("beacon")) {
+      // ── Step A: While on the episode page, capture the embed iframe URL ──
+      if (!embedNavigated && EMBED_IFRAME_PATTERNS.some(fn => fn(u))) {
+        capturedEmbedUrl = u;
+        console.log("[wcoExtractor] Captured embed iframe URL:", u.slice(0, 120));
+        callback({ cancel: true }); // Cancel the iframe load inside episode page
+        return;
+      }
+
+      // ── Step B: After navigating to embed iframe, intercept the real stream ──
+      if (embedNavigated && STREAM_PATTERNS.some(fn => fn(u))) {
+        if (!u.includes("1x1") && !u.includes("pixel") && !u.includes("beacon") && !u.includes("pop-530")) {
           resolved = true;
           clearTimeout(timeout);
           cleanup();
-          console.log("[wcoExtractor] Phase 2 network intercepted:", u.slice(0, 120));
+          console.log("[wcoExtractor] Phase 2 stream intercepted from embed:", u.slice(0, 120));
           try { if (extractorWin && !extractorWin.isDestroyed()) extractorWin.webContents.stop(); } catch {}
           resolve(u);
           callback({ cancel: false });
           return;
         }
       }
+
+      // Also intercept streams even before embed navigation (phase 0.5 - sometimes fires early)
+      if (!embedNavigated && STREAM_PATTERNS.some(fn => fn(u))) {
+        if (!u.includes("1x1") && !u.includes("pixel") && !u.includes("beacon") && !u.includes("pop-530")) {
+          resolved = true;
+          clearTimeout(timeout);
+          cleanup();
+          console.log("[wcoExtractor] Phase 2 early stream intercepted:", u.slice(0, 120));
+          try { if (extractorWin && !extractorWin.isDestroyed()) extractorWin.webContents.stop(); } catch {}
+          resolve(u);
+          callback({ cancel: false });
+          return;
+        }
+      }
+
       callback({});
     };
 
@@ -1116,15 +1158,14 @@ async function extractVideo(episodeUrl) {
     }
 
     try {
-      // Inject fake browser headers to bypass bot detection
       extractorWin.webContents.session.webRequest.onBeforeSendHeaders({ urls: ["*://*/*"] }, (details, cb) => {
         const h = { ...details.requestHeaders };
-        h["Referer"]    = BASE_URL + "/";
-        h["Origin"]     = BASE_URL;
-        h["User-Agent"] = BASE_HEADERS["User-Agent"];
-        h["Accept-Language"] = "en-US,en;q=0.9";
-        h["Sec-Fetch-Dest"] = "document";
-        h["Sec-Fetch-Mode"] = "navigate";
+        h["Referer"]          = BASE_URL + "/";
+        h["Origin"]           = BASE_URL;
+        h["User-Agent"]       = BASE_HEADERS["User-Agent"];
+        h["Accept-Language"]  = "en-US,en;q=0.9";
+        h["Sec-Fetch-Dest"]   = "document";
+        h["Sec-Fetch-Mode"]   = "navigate";
         cb({ requestHeaders: h });
       });
 
@@ -1137,112 +1178,126 @@ async function extractVideo(episodeUrl) {
     }
 
     try {
+      // ── Step 1: Load the episode page to discover the embed iframe URL ──
+      console.log("[wcoExtractor] Step 1: Loading episode page:", url.slice(0, 80));
       await extractorWin.loadURL(url, {
         userAgent: BASE_HEADERS["User-Agent"],
         httpReferrer: BASE_URL + "/",
       });
 
-      // Phase 3+4: DOM deep-dive polling after page load
-      const pollEnd = Date.now() + 18000;
-      while (Date.now() < pollEnd && !resolved) {
-        await sleep(500);
-        if (!extractorWin || extractorWin.isDestroyed()) break;
+      // Wait up to 5s for the embed iframe to be detected via requestHandler
+      const embedWaitEnd = Date.now() + 5000;
+      while (Date.now() < embedWaitEnd && !capturedEmbedUrl && !resolved) {
+        await sleep(200);
 
-        // Auto-dismiss ad/cookie overlays
-        await extractorWin.webContents.executeJavaScript(`
-          (function() {
-            try {
-              const overlaySelectors = [
-                '.ad-overlay', '#ad-overlay', '.overlay-close', '#dismiss-button',
-                'button[class*="close"]', 'div[class*="close"]', 'a[class*="close"]',
-                '[aria-label="Close"]', '[aria-label="close"]',
-              ];
-              overlaySelectors.forEach(sel => {
-                document.querySelectorAll(sel).forEach(el => {
-                  const txt = (el.textContent || '').trim().toLowerCase();
-                  if (txt.includes('close') || txt === 'x' || txt === '×' || el.className?.includes('close')) {
-                    el.click();
-                  }
-                });
-              });
-            } catch {}
-          })()
-        `).catch(() => {});
+        // Also try to extract it from the DOM if the request interceptor missed it
+        if (!capturedEmbedUrl) {
+          capturedEmbedUrl = await extractorWin.webContents.executeJavaScript(`
+            (function() {
+              try {
+                const f = document.querySelector(
+                  'iframe[src*="vhs.wcostream"], iframe[src*="embed.wcostream"]'
+                );
+                return f ? f.src : null;
+              } catch { return null; }
+            })()
+          `).catch(() => null);
+        }
+      }
 
-        // DOM deep-dive: check video src, iframe src, inline script getvid links
-        const domSrc = await extractorWin.webContents.executeJavaScript(`
-          (function() {
-            try {
-              // Active video element
-              const v = document.querySelector('video');
-              if (v && v.src && v.src.startsWith('http') && !v.src.includes('blob:')) return v.src;
-              const vsrc = document.querySelector('video source');
-              if (vsrc && vsrc.src && vsrc.src.startsWith('http')) return vsrc.src;
+      // If already resolved by an early stream intercept, we're done
+      if (resolved) return;
 
-              // Direct iframe embed
-              const iframe = document.querySelector(
-                'iframe[src*="getvid"], iframe[src*="embed"], iframe[src*="inc/"], iframe[src*="vid/"]'
-              );
-              if (iframe && iframe.src && iframe.src.startsWith('http')) return iframe.src;
+      // ── Step 2: Navigate extractorWin directly to the embed iframe ──
+      if (capturedEmbedUrl) {
+        console.log("[wcoExtractor] Step 2: Navigating to embed iframe:", capturedEmbedUrl.slice(0, 100));
+        embedNavigated = true;
 
-              // Scan all inline scripts for getvid / m3u8 / mp4 / base64
-              const scriptContent = Array.from(document.querySelectorAll('script'))
-                .map(s => s.textContent || '').join('\\n');
+        try {
+          await extractorWin.loadURL(capturedEmbedUrl, {
+            userAgent: BASE_HEADERS["User-Agent"],
+            httpReferrer: url,
+          });
+        } catch (e) {
+          if (!e.message?.includes("ERR_ABORTED") && !e.message?.includes("ERR_BLOCKED")) {
+            console.warn("[wcoExtractor] Embed load error:", e.message);
+          }
+        }
 
-              // Base64 decoder check
-              const b64RE = /atob\\(["']([A-Za-z0-9+\\/=]{20,})["']\\)/g;
-              let bm;
-              while ((bm = b64RE.exec(scriptContent)) !== null) {
-                try {
-                  const dec = atob(bm[1]);
-                  if (dec.includes('getvid') || dec.includes('.mp4') || dec.includes('.m3u8')) return dec;
-                } catch {}
-              }
+        // ── Step 3: Dismiss the 10-second overlay, poll for stream or video src ──
+        const pollEnd = Date.now() + 20000;
+        while (Date.now() < pollEnd && !resolved) {
+          await sleep(600);
+          if (!extractorWin || extractorWin.isDestroyed()) break;
 
-              // getvid / evid link in scripts
-              const getvidRE = /(?:getvid|evid)=[^\\s"'&,]+/g;
-              let gm;
-              while ((gm = getvidRE.exec(scriptContent)) !== null) {
-                return gm[0].startsWith('http') ? gm[0] : null;
-              }
+          // Dismiss WCO overlay: #close-btn countdown, #announcement, #backdrop
+          await extractorWin.webContents.executeJavaScript(`
+            (function() {
+              try {
+                const cb = document.getElementById('close-btn');
+                if (cb) cb.click();
+                const ann = document.getElementById('announcement');
+                if (ann) ann.style.display = 'none';
+                const bd = document.getElementById('backdrop');
+                if (bd) bd.style.display = 'none';
+                // Also force-click any generic close buttons
+                document.querySelectorAll('[class*=close],[id*=close],[aria-label="Close"]')
+                  .forEach(el => { try { el.click(); } catch {} });
+              } catch {}
+            })()
+          `).catch(() => {});
 
-              // m3u8 / mp4 direct in scripts
-              const mediaRE = /["'\`](https?:\\/\\/[^"'\`\\s]+\\.(?:m3u8|mp4)[^"'\`\\s]*)["'\`]/i;
-              const mm = scriptContent.match(mediaRE);
-              if (mm) return mm[1];
+          // Check if a video src is now visible in the DOM
+          const videoSrc = await extractorWin.webContents.executeJavaScript(`
+            (function() {
+              try {
+                const v = document.querySelector('video');
+                if (v && v.src && v.src.startsWith('http') && !v.src.includes('blob:')) return v.src;
+                const vsrc = document.querySelector('video source');
+                if (vsrc && vsrc.src && vsrc.src.startsWith('http')) return vsrc.src;
+              } catch {}
+              return null;
+            })()
+          `).catch(() => null);
 
-              // Check direct links
-              const allLinks = Array.from(document.querySelectorAll('a[href], iframe[src]'));
-              for (const l of allLinks) {
-                const href = l.href || l.src || '';
-                if (href.includes('getvid') || href.includes('evid=') || href.includes('.m3u8')) return href;
-              }
-            } catch {}
-            return null;
-          })()
-        `).catch(() => null);
-
-        if (domSrc && !resolved) {
-          // If it's an embed URL rather than direct stream, resolve it via AJAX
-          if (domSrc.includes("getvid") || domSrc.includes(".m3u8") || domSrc.includes(".mp4")) {
+          if (videoSrc && !resolved) {
             resolved = true;
             clearTimeout(timeout);
             cleanup();
-            console.log("[wcoExtractor] Phase 3 DOM deep-dive stream:", domSrc.slice(0, 120));
+            console.log("[wcoExtractor] Phase 3 DOM video src:", videoSrc.slice(0, 120));
             try { if (extractorWin && !extractorWin.isDestroyed()) extractorWin.webContents.stop(); } catch {}
+            resolve(videoSrc);
+            return;
+          }
+        }
+      } else {
+        // Fallback: no embed iframe found — do legacy DOM deep-dive on episode page
+        console.warn("[wcoExtractor] No embed iframe detected, falling back to DOM scan on episode page");
+        const pollEnd = Date.now() + 15000;
+        while (Date.now() < pollEnd && !resolved) {
+          await sleep(500);
+          if (!extractorWin || extractorWin.isDestroyed()) break;
+
+          const domSrc = await extractorWin.webContents.executeJavaScript(`
+            (function() {
+              try {
+                const v = document.querySelector('video');
+                if (v && v.src && v.src.startsWith('http')) return v.src;
+                const scripts = Array.from(document.querySelectorAll('script')).map(s => s.textContent).join('\\n');
+                const m = scripts.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+                if (m) return m[1];
+              } catch {}
+              return null;
+            })()
+          `).catch(() => null);
+
+          if (domSrc && !resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            cleanup();
+            console.log("[wcoExtractor] Fallback DOM stream:", domSrc.slice(0, 120));
             resolve(domSrc);
             return;
-          } else if (domSrc.startsWith("http") && (domSrc.includes("embed") || domSrc.includes("inc/"))) {
-            // Resolve iframe URL
-            const iframeStream = await resolveGetVidAJAX(domSrc).catch(() => null);
-            if (iframeStream && !resolved) {
-              resolved = true;
-              clearTimeout(timeout);
-              cleanup();
-              console.log("[wcoExtractor] Phase 3 iframe→AJAX stream:", iframeStream.slice(0, 120));
-              resolve(iframeStream);
-              return;
-            }
           }
         }
       }

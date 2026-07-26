@@ -42,9 +42,9 @@ interface PlaybackState {
  * explicitly rather than relying on this.
  */
 function inferKind(item: PlaybackItem): PlayerKind {
+  if (item.wcoUrl || item.group === "VOD") return "vod";
   const url = (item.url || "").toLowerCase();
   if (url.includes(".m3u8") || url.includes(".m3u") || url.includes("/hls")) return "live";
-  if (item.wcoUrl) return "vod";
   return "live";
 }
 

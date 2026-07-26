@@ -140,7 +140,14 @@ class MpvController {
     });
   }
 
-  loadFile(url) {
+  async loadFile(url) {
+    if (url.includes("wco") || url.includes("getvid") || url.includes("watchnixtoons")) {
+      const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+      const ref = "https://www.wcostream.tv/";
+      await this.command(["set_property", "user-agent", ua]).catch(() => {});
+      await this.command(["set_property", "referrer", ref]).catch(() => {});
+      await this.command(["set_property", "http-header-fields", [`Referer: ${ref}`, `User-Agent: ${ua}`]]).catch(() => {});
+    }
     return this.command(["loadfile", url, "replace"]);
   }
 
