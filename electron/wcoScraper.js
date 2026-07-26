@@ -426,7 +426,60 @@ async function getEpisodes(showUrl) {
   });
 }
 
-// ─── Video Extraction ──────────────────────────────────────────────────────────
+// ─── Video Extraction & View-Source Bypass ──────────────────────────────────────
+
+/**
+ * Advanced view-source / HTML regex stream extractor that parses inline scripts,
+ * base64 encoded player parameters, jwplayer configurations, and hidden iframes.
+ */
+function extractStreamFromHTML(html, baseUrl = BASE_URL) {
+  if (!html) return null;
+
+  try {
+    // 1. Direct getvid / evid regex matching in HTML/scripts
+    const getvidMatch = html.match(/https?:\/\/[^\s"'<>]*(?:getvid|evid=)[^\s"'<>]+/i) ||
+                        html.match(/(?:\/inc\/embed\/|\/embed\/)[^\s"'<>]+/i);
+    if (getvidMatch) {
+      const matchUrl = getvidMatch[0].replace(/\\/g, '');
+      return normalizeUrl(matchUrl) || (matchUrl.startsWith('/') ? baseUrl + matchUrl : matchUrl);
+    }
+
+    // 2. Inline base64 decoding (WCO obfuscated stream links)
+    const b64Matches = html.match(/atob\(["']([A-Za-z0-9+/=]+)["']\)/g);
+    if (b64Matches) {
+      for (const m of b64Matches) {
+        const rawB64 = m.match(/atob\(["']([A-Za-z0-9+/=]+)["']\)/)?.[1];
+        if (rawB64) {
+          try {
+            const decoded = Buffer.from(rawB64, 'base64').toString('utf8');
+            if (decoded.includes('getvid') || decoded.includes('.mp4') || decoded.includes('.m3u8')) {
+              return normalizeUrl(decoded) || decoded;
+            }
+          } catch {}
+        }
+      }
+    }
+
+    // 3. JWPlayer / VideoJS source configuration regex
+    const mediaMatch = html.match(/file\s*:\s*["']([^"'\s]+\.(?:mp4|m3u8)[^"'\s]*)["']/i) ||
+                       html.match(/src\s*:\s*["']([^"'\s]+\.(?:mp4|m3u8)[^"'\s]*)["']/i) ||
+                       html.match(/["'](https?:\/\/[^"'\s]+\.(?:mp4|m3u8)[^"'\s]*)["']/i);
+    if (mediaMatch && !mediaMatch[1].includes('preview') && !mediaMatch[1].includes('thumbnail')) {
+      return mediaMatch[1];
+    }
+
+    // 4. Hidden iframe src matching
+    const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+    if (iframeMatch && (iframeMatch[1].includes('getvid') || iframeMatch[1].includes('embed') || iframeMatch[1].includes('inc/'))) {
+      const frameUrl = iframeMatch[1];
+      return normalizeUrl(frameUrl) || (frameUrl.startsWith('/') ? baseUrl + frameUrl : frameUrl);
+    }
+  } catch (e) {
+    console.warn("[wcoExtractor] extractStreamFromHTML parsing error:", e.message);
+  }
+
+  return null;
+}
 
 async function extractVideo(episodeUrl) {
   return new Promise(async (resolve) => {
@@ -536,19 +589,39 @@ async function extractVideo(episodeUrl) {
           })()
         `).catch(() => {});
 
-        // DOM deep-dive for video src / iframe src / getvid link
+        // DOM deep-dive & View-Source script extraction for video src / iframe src / getvid link
         const domSrc = await extractorWin.webContents.executeJavaScript(`
           (function() {
             try {
+              // Check active video element
               const v = document.querySelector('video');
               if (v && v.src && v.src.startsWith('http')) return v.src;
 
               const source = document.querySelector('video source');
               if (source && source.src && source.src.startsWith('http')) return source.src;
 
-              const iframe = document.querySelector('iframe[src*="getvid"], iframe[src*="embed"]');
+              // Check direct iframe embed
+              const iframe = document.querySelector('iframe[src*="getvid"], iframe[src*="embed"], iframe[src*="inc/"]');
               if (iframe && iframe.src) return iframe.src;
 
+              // View-source algorithm: Scan all page scripts for base64 / getvid / .mp4 / .m3u8
+              const scripts = Array.from(document.querySelectorAll('script')).map(s => s.textContent || '').join('\\n');
+              
+              // Base64 decoder check in scripts
+              const b64Matches = scripts.match(/atob\\(["']([A-Za-z0-9+/=]+)["']\\)/g);
+              if (b64Matches) {
+                for (const m of b64Matches) {
+                  const b64 = m.match(/atob\\(["']([A-Za-z0-9+/=]+)["']\\)/)?.[1];
+                  if (b64) {
+                    try {
+                      const dec = atob(b64);
+                      if (dec.includes('getvid') || dec.includes('.mp4') || dec.includes('.m3u8')) return dec;
+                    } catch (e) {}
+                  }
+                }
+              }
+
+              // Direct link scan
               const allLinks = Array.from(document.querySelectorAll('a[href], iframe[src]'));
               for (const l of allLinks) {
                 const href = l.href || l.src || '';
@@ -563,7 +636,7 @@ async function extractVideo(episodeUrl) {
           resolved = true;
           clearTimeout(timeout);
           cleanup();
-          console.log("[wcoExtractor] DOM deep-dive found stream:", domSrc.slice(0, 150));
+          console.log("[wcoExtractor] View-source DOM deep-dive found stream:", domSrc.slice(0, 150));
           try { extractorWin.webContents.stop(); } catch {}
           resolve(domSrc);
           return;
