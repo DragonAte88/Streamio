@@ -31,11 +31,20 @@ function cleanTitleNoise(rawName) {
   return cleaned.replace(/\s+/g, " ").trim();
 }
 
+// Node's global fetch has no `timeout` option - passing one is silently
+// ignored, which meant every outbound call here could hang indefinitely. A
+// single stalled HEAD request would hold the whole /artwork/search response
+// open until the client gave up, which is the main reason artwork "took
+// forever". AbortSignal.timeout is the option that actually works.
+function fetchWithTimeout(url, opts = {}, ms = 6000) {
+  return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) });
+}
+
 // 2. HTTP HEAD image verification
 async function verifyImage(url) {
   if (!url) return false;
   try {
-    const res = await fetch(url, { method: "HEAD", timeout: 3000 });
+    const res = await fetchWithTimeout(url, { method: "HEAD" }, 3000);
     return res.ok && res.headers.get("content-type")?.startsWith("image/");
   } catch (err) {
     return false;
@@ -46,7 +55,7 @@ async function verifyImage(url) {
 async function tmdbSearchTv(query) {
   if (!TMDB_KEY) return null;
   const url = `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_KEY}&query=${encodeURIComponent(query)}`;
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   if (!res.ok) return null;
   const data = await res.json();
   return data.results?.[0] || null;
@@ -55,7 +64,7 @@ async function tmdbSearchTv(query) {
 async function tmdbSearchMovie(query) {
   if (!TMDB_KEY) return null;
   const url = `https://api.themoviedb.org/3/search/movie?api_key=${TMDB_KEY}&query=${encodeURIComponent(query)}`;
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   if (!res.ok) return null;
   const data = await res.json();
   return data.results?.[0] || null;
@@ -65,7 +74,7 @@ async function tmdbGetExternalIds(tmdbId, kind) {
   if (!TMDB_KEY) return null;
   // kind: "tv" or "movie"
   const url = `https://api.themoviedb.org/3/${kind}/${tmdbId}/external_ids?api_key=${TMDB_KEY}`;
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   if (!res.ok) return null;
   return await res.json();
 }
@@ -74,7 +83,7 @@ async function fanartTvLookup(tvdbId, kind) {
   if (!FANART_KEY || !tvdbId) return null;
   const url = `https://webservice.fanart.tv/v3/${kind}/${tvdbId}?api_key=${FANART_KEY}`;
   try {
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     if (!res.ok) return null;
     const data = await res.json();
     
@@ -103,7 +112,7 @@ async function fanartTvLookup(tvdbId, kind) {
 async function jikanAnimeLookup(query) {
   const url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=1`;
   try {
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     if (!res.ok) return null;
     const data = await res.json();
     if (data.data && data.data.length > 0) {
@@ -122,7 +131,7 @@ async function jikanAnimeLookup(query) {
 async function tvmazeLookup(query) {
   const url = `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(query)}`;
   try {
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     if (!res.ok) return null;
     const data = await res.json();
     return data.image?.original || data.image?.medium || null;
@@ -133,7 +142,7 @@ async function tvmazeLookup(query) {
 
 async function omdbFallback(title) {
   if (!OMDB_KEY) return null;
-  const res = await fetch(`https://www.omdbapi.com/?apikey=${OMDB_KEY}&t=${encodeURIComponent(title)}`);
+  const res = await fetchWithTimeout(`https://www.omdbapi.com/?apikey=${OMDB_KEY}&t=${encodeURIComponent(title)}`);
   if (!res.ok) return null;
   const data = await res.json();
   return data.Poster && data.Poster !== "N/A" ? data.Poster : null;
