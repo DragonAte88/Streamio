@@ -357,9 +357,12 @@ async function getEpisodes(showUrl) {
   const url = normalizeUrl(showUrl) || showUrl;
   const existing = diskCacheData.episodes[url];
 
-  // 48 hour cache TTL for show episodes
-  if (existing && Date.now() - existing.timestamp < 48 * 3600 * 1000 && existing.data?.length > 0) {
+  // 48 hour cache TTL for show episodes (must have > 0 items)
+  if (existing && existing.data?.length > 0 && Date.now() - existing.timestamp < 48 * 3600 * 1000) {
     return existing.data;
+  }
+  if (existing && (!existing.data || existing.data.length === 0)) {
+    delete diskCacheData.episodes[url];
   }
 
   return withNavLock(async () => {
@@ -407,13 +410,18 @@ async function getEpisodes(showUrl) {
         .map(e => ({ title: e.title, url: normalizeUrl(e.url) || e.url }))
         .filter(e => e.url)
         .reverse(); // Chronological
-    } else if (existing?.data?.length > 0) {
-      console.warn("[wcoScraper] getEpisodes 0 items live, returning disk fallback");
-      return existing.data;
     }
 
-    diskCacheData.episodes[url] = { data: normalised, timestamp: Date.now() };
-    saveDiskCache();
+    // Fallback: If 0 items parsed from current URL, clear any corrupt empty disk entry
+    if (normalised.length === 0 && existing) {
+      delete diskCacheData.episodes[url];
+      saveDiskCache();
+    }
+
+    if (normalised.length > 0) {
+      diskCacheData.episodes[url] = { data: normalised, timestamp: Date.now() };
+      saveDiskCache();
+    }
     return normalised;
   });
 }

@@ -124,9 +124,14 @@ export default function KidsShow() {
 
       if (showUrl) {
         raw = await window.wco.getEpisodes(showUrl);
-      } else {
+      }
+
+      if (raw.length === 0 && showTitle) {
+        setLoadingMsg("Searching WCO catalog for show...");
         const results = await window.wco.search(showTitle, "all");
-        if (results.length > 0) raw = await window.wco.getEpisodes(results[0].url);
+        if (results.length > 0) {
+          raw = await window.wco.getEpisodes(results[0].url);
+        }
       }
 
       clearInterval(msgTimer);
