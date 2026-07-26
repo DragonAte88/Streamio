@@ -246,6 +246,16 @@ export default function Anime() {
     update({ sort });
   };
 
+  // ── Pagination ──
+  const PAGE_SIZE = 25;
+  const [page, setPage] = useState(0);
+
+  // Reset to page 0 whenever filters or sort change
+  useEffect(() => { setPage(0); }, [filters, shuffleSeed]);
+
+  const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
+  const pagedResults = results.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
   const activeSort = ANIME_SORTS.find((s) => s.value === filters.sort);
   const withArtwork = Array.from(artworkMap.values()).filter(Boolean).length;
 
@@ -471,16 +481,24 @@ export default function Anime() {
           </div>
         ) : (
           <>
-            {/* Result count */}
-            <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 14 }}>
-              {results.length.toLocaleString()} title{results.length === 1 ? "" : "s"}
-              {results.length !== allItems.length && ` of ${allItems.length.toLocaleString()}`}
-              {loading && <span style={{ marginLeft: 8, opacity: 0.6 }}> (still loading…)</span>}
+            {/* Result count + page info */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+              <div style={{ color: "var(--text-dim)", fontSize: 13 }}>
+                {results.length.toLocaleString()} title{results.length === 1 ? "" : "s"}
+                {results.length !== allItems.length && ` of ${allItems.length.toLocaleString()}`}
+                {loading && <span style={{ marginLeft: 8, opacity: 0.6 }}>(still loading…)</span>}
+                <span style={{ marginLeft: 10, opacity: 0.5 }}>— Page {page + 1} of {pageCount}, showing {pagedResults.length}</span>
+              </div>
+
+              {/* Top pagination bar */}
+              {pageCount > 1 && (
+                <Pagination page={page} pageCount={pageCount} onChange={setPage} />
+              )}
             </div>
 
             {view === "grid" ? (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-                {results.map((item) => (
+                {pagedResults.map((item) => (
                   <AnimeCard
                     key={item.id}
                     item={item}
@@ -488,14 +506,14 @@ export default function Anime() {
                     inMyList={myList.has(item.id)}
                     onPosterLoaded={(poster) => setArtwork(item.id, poster)}
                     onToggleMyList={(e) => toggleMyList(item.id, e)}
-                    onClick={() => nav("/kids/show", { state: { title: item.title, url: item.url } })}
+                    onClick={() => nav("/kids/show", { state: { title: item.title, url: item.url, type: item.type } })}
                     loggedIn={!!token}
                   />
                 ))}
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {results.map((item) => (
+                {pagedResults.map((item) => (
                   <ListRow
                     key={item.id}
                     item={item}
@@ -503,10 +521,17 @@ export default function Anime() {
                     inMyList={myList.has(item.id)}
                     onPosterLoaded={(poster) => setArtwork(item.id, poster)}
                     onToggleMyList={(e) => toggleMyList(item.id, e)}
-                    onClick={() => nav("/kids/show", { state: { title: item.title, url: item.url } })}
+                    onClick={() => nav("/kids/show", { state: { title: item.title, url: item.url, type: item.type } })}
                     loggedIn={!!token}
                   />
                 ))}
+              </div>
+            )}
+
+            {/* Bottom pagination bar */}
+            {pageCount > 1 && (
+              <div style={{ display: "flex", justifyContent: "center", marginTop: 32 }}>
+                <Pagination page={page} pageCount={pageCount} onChange={(p) => { setPage(p); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
               </div>
             )}
           </>
@@ -518,22 +543,20 @@ export default function Anime() {
 
 // ─── AnimeCard (grid) ─────────────────────────────────────────────────────────
 
+const TYPE_BADGE: Record<string, { bg: string; label: string; glow: string }> = {
+  dub:     { bg: "#6366f1", label: "DUB",   glow: "rgba(99,102,241,0.5)" },
+  sub:     { bg: "#ec4899", label: "SUB",   glow: "rgba(236,72,153,0.5)" },
+  cartoon: { bg: "#f59e0b", label: "TOON",  glow: "rgba(245,158,11,0.5)" },
+  movie:   { bg: "#10b981", label: "MOVIE", glow: "rgba(16,185,129,0.5)" },
+};
+
 function AnimeCard({
-  item,
-  poster,
-  inMyList,
-  onPosterLoaded,
-  onToggleMyList,
-  onClick,
-  loggedIn,
+  item, poster, inMyList, onPosterLoaded, onToggleMyList, onClick, loggedIn,
 }: {
-  item: WcoItem;
-  poster: string | null;
-  inMyList: boolean;
+  item: WcoItem; poster: string | null; inMyList: boolean;
   onPosterLoaded: (poster: string | null) => void;
   onToggleMyList: (e: React.MouseEvent) => void;
-  onClick: () => void;
-  loggedIn: boolean;
+  onClick: () => void; loggedIn: boolean;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const fetchedRef = useRef(false);
@@ -547,10 +570,8 @@ function AnimeCard({
         if (entries[0].isIntersecting && !fetchedRef.current) {
           fetchedRef.current = true;
           observer.disconnect();
-          const kind = item.type === "movie" ? "movie" : "tv";
-          fetchArtwork(item.title, kind).then((art) => {
-            onPosterLoaded(art?.poster || null);
-          });
+          fetchArtwork(item.title, item.type === "movie" ? "movie" : "tv")
+            .then((art) => onPosterLoaded(art?.poster || null));
         }
       },
       { rootMargin: "300px" }
@@ -559,13 +580,7 @@ function AnimeCard({
     return () => observer.disconnect();
   }, [item.title, item.type]);
 
-  // Type badge colors
-  const typeBadgeColor: Record<string, string> = {
-    dub: "#6366f1",
-    sub: "#ec4899",
-    cartoon: "#f59e0b",
-    movie: "#10b981",
-  };
+  const badge = TYPE_BADGE[item.type] || TYPE_BADGE.dub;
 
   return (
     <div
@@ -577,152 +592,134 @@ function AnimeCard({
         position: "relative",
         width: 160,
         height: 240,
-        borderRadius: 10,
+        borderRadius: 12,
         overflow: "hidden",
         cursor: "pointer",
         flexShrink: 0,
         background: poster
           ? `url(${poster}) center/cover no-repeat`
-          : "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
-        border: hovered ? "2px solid var(--accent)" : "2px solid transparent",
-        transition: "border-color 0.15s, transform 0.15s, box-shadow 0.15s",
-        transform: hovered ? "scale(1.05)" : "scale(1)",
-        boxShadow: hovered ? "0 12px 40px rgba(0,0,0,0.6)" : "0 2px 8px rgba(0,0,0,0.3)",
+          : `linear-gradient(145deg, #1e1e30 0%, #12121e 100%)`,
+        // Glow ring matching type color on hover
+        border: hovered ? `2px solid ${badge.bg}` : "2px solid rgba(255,255,255,0.06)",
+        transition: "border-color 0.18s, transform 0.18s cubic-bezier(.34,1.56,.64,1), box-shadow 0.18s",
+        transform: hovered ? "scale(1.07) translateY(-3px)" : "scale(1)",
+        boxShadow: hovered
+          ? `0 20px 48px rgba(0,0,0,0.7), 0 0 0 1px ${badge.glow}`
+          : "0 4px 12px rgba(0,0,0,0.4)",
       }}
     >
-      {/* Gradient overlay */}
+      {/* ── Bottom scrim ONLY — just enough to read the title ── */}
       <div
         style={{
           position: "absolute",
           inset: 0,
+          // Only dark at the very bottom, fully clear at top-60%
           background: poster
-            ? "linear-gradient(to top, rgba(0,0,0,0.92) 40%, rgba(0,0,0,0.05) 100%)"
-            : "linear-gradient(to top, rgba(0,0,0,0.8) 0%, rgba(20,20,40,0.6) 100%)",
+            ? "linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.45) 30%, transparent 60%)"
+            : "linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(15,15,30,0.5) 100%)",
+          transition: "opacity 0.18s",
         }}
       />
 
-      {/* Placeholder icon */}
-      {!poster && (
-        <div
-          style={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -60%)",
-            fontSize: 42,
-            opacity: 0.2,
-          }}
-        >
-          🎌
-        </div>
-      )}
-
-      {/* Type badge */}
+      {/* ── Glass shine layer (glossy look) ── */}
       <div
         style={{
           position: "absolute",
-          top: 8,
-          left: 8,
-          background: typeBadgeColor[item.type] || "#6366f1",
-          color: "#fff",
-          fontSize: 10,
-          fontWeight: 700,
-          padding: "3px 7px",
-          borderRadius: 4,
-          letterSpacing: 0.5,
-          textTransform: "uppercase",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: "45%",
+          background: "linear-gradient(to bottom, rgba(255,255,255,0.10) 0%, transparent 100%)",
+          borderRadius: "12px 12px 0 0",
+          pointerEvents: "none",
         }}
-      >
-        {item.type === "dub" ? "DUB" : item.type === "sub" ? "SUB" : item.type === "movie" ? "MOVIE" : "TOON"}
+      />
+
+      {/* ── Placeholder icon (no poster) ── */}
+      {!poster && (
+        <div style={{
+          position: "absolute", top: "38%", left: "50%",
+          transform: "translate(-50%, -50%)", fontSize: 44, opacity: 0.18,
+        }}>🎌</div>
+      )}
+
+      {/* ── Type badge ── */}
+      <div style={{
+        position: "absolute", top: 9, left: 9,
+        background: badge.bg,
+        color: "#fff", fontSize: 9.5, fontWeight: 800,
+        padding: "3px 8px", borderRadius: 5,
+        letterSpacing: 0.8, textTransform: "uppercase",
+        boxShadow: `0 2px 8px ${badge.glow}`,
+      }}>
+        {badge.label}
       </div>
 
-      {/* My List bookmark */}
+      {/* ── My List bookmark ── */}
       {loggedIn && (
         <button
           onClick={onToggleMyList}
           title={inMyList ? "Remove from My List" : "Add to My List"}
           style={{
-            position: "absolute",
-            top: 8,
-            right: 8,
-            width: 28,
-            height: 28,
-            borderRadius: "50%",
-            cursor: "pointer",
-            border: "none",
-            background: "rgba(0,0,0,0.6)",
+            position: "absolute", top: 8, right: 8,
+            width: 28, height: 28, borderRadius: "50%",
+            cursor: "pointer", border: "none",
+            background: "rgba(0,0,0,0.55)",
+            backdropFilter: "blur(4px)",
             color: inMyList ? "#fbbf24" : "rgba(255,255,255,0.7)",
-            fontSize: 15,
-            lineHeight: "28px",
-            textAlign: "center",
-            transition: "color 0.15s",
+            fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center",
+            transition: "color 0.15s, background 0.15s",
           }}
         >
           {inMyList ? "★" : "☆"}
         </button>
       )}
 
-      {/* Title */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          padding: "10px 10px 12px",
-        }}
-      >
-        <div
-          style={{
-            fontSize: 12,
-            fontWeight: 600,
-            color: "#fff",
-            lineHeight: 1.35,
-            display: "-webkit-box",
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
-        >
+      {/* ── Title + action bar at bottom ── */}
+      <div style={{
+        position: "absolute", bottom: 0, left: 0, right: 0,
+        padding: "8px 10px 11px",
+      }}>
+        <div style={{
+          fontSize: 12, fontWeight: 700, color: "#fff",
+          lineHeight: 1.35, textShadow: "0 1px 4px rgba(0,0,0,0.8)",
+          display: "-webkit-box",
+          WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+        }}>
           {item.title}
         </div>
-        <div
-          style={{
-            marginTop: 6,
-            fontSize: 10,
-            fontWeight: 700,
-            color: "var(--accent)",
-            textTransform: "uppercase",
-            letterSpacing: 1,
-            opacity: hovered ? 1 : 0,
-            transition: "opacity 0.15s",
-          }}
-        >
-          ▶ View Episodes
+
+        {/* Hover reveal play bar */}
+        <div style={{
+          marginTop: 6,
+          display: "flex", alignItems: "center", gap: 4,
+          opacity: hovered ? 1 : 0,
+          transform: hovered ? "translateY(0)" : "translateY(4px)",
+          transition: "opacity 0.15s, transform 0.15s",
+        }}>
+          <span style={{ fontSize: 9, fontWeight: 800, color: badge.bg, textTransform: "uppercase", letterSpacing: 1 }}>
+            ▶ {item.type === "movie" ? "Watch" : "View Episodes"}
+          </span>
         </div>
       </div>
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }
 
+
 // ─── ListRow ──────────────────────────────────────────────────────────────────
 
 function ListRow({
-  item,
-  poster,
-  inMyList,
-  onPosterLoaded,
-  onToggleMyList,
-  onClick,
-  loggedIn,
+  item, poster, inMyList, onPosterLoaded, onToggleMyList, onClick, loggedIn,
 }: {
-  item: WcoItem;
-  poster: string | null;
-  inMyList: boolean;
+  item: WcoItem; poster: string | null; inMyList: boolean;
   onPosterLoaded: (poster: string | null) => void;
   onToggleMyList: (e: React.MouseEvent) => void;
-  onClick: () => void;
-  loggedIn: boolean;
+  onClick: () => void; loggedIn: boolean;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const fetchedRef = useRef(false);
@@ -736,10 +733,8 @@ function ListRow({
         if (entries[0].isIntersecting && !fetchedRef.current) {
           fetchedRef.current = true;
           observer.disconnect();
-          const kind = item.type === "movie" ? "movie" : "tv";
-          fetchArtwork(item.title, kind).then((art) => {
-            onPosterLoaded(art?.poster || null);
-          });
+          fetchArtwork(item.title, item.type === "movie" ? "movie" : "tv")
+            .then((art) => onPosterLoaded(art?.poster || null));
         }
       },
       { rootMargin: "200px" }
@@ -748,6 +743,8 @@ function ListRow({
     return () => observer.disconnect();
   }, [item.title, item.type]);
 
+  const badge = TYPE_BADGE[item.type] || TYPE_BADGE.dub;
+
   return (
     <div
       ref={rowRef}
@@ -755,51 +752,45 @@ function ListRow({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 14,
+        display: "flex", alignItems: "center", gap: 14,
         padding: "10px 14px",
-        background: hovered ? "#16161f" : "#101017",
-        border: `1px solid ${hovered ? "var(--accent)" : "#1e1e28"}`,
-        borderRadius: 8,
+        background: hovered ? "rgba(99,102,241,0.08)" : "rgba(255,255,255,0.025)",
+        border: `1px solid ${hovered ? badge.bg : "rgba(255,255,255,0.06)"}`,
+        borderRadius: 10,
         cursor: "pointer",
-        transition: "border-color 0.12s, background 0.12s",
+        transition: "border-color 0.12s, background 0.12s, box-shadow 0.12s",
+        boxShadow: hovered ? `0 4px 20px rgba(0,0,0,0.4), 0 0 0 1px ${badge.glow}` : "none",
       }}
     >
       {/* Thumbnail */}
-      <div
-        style={{
-          width: 56,
-          height: 80,
-          borderRadius: 6,
-          flexShrink: 0,
-          background: poster
-            ? `#000 url(${poster}) center/cover no-repeat`
-            : "linear-gradient(135deg, #1a1a2e, #16213e)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 22,
-          opacity: poster ? 1 : 0.4,
-        }}
-      >
+      <div style={{
+        width: 52, height: 76, borderRadius: 7, flexShrink: 0,
+        background: poster
+          ? `url(${poster}) center/cover no-repeat`
+          : `linear-gradient(145deg, #1e1e30, #12121e)`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 20, opacity: poster ? 1 : 0.3,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+        overflow: "hidden",
+      }}>
         {!poster && "🎌"}
       </div>
 
       {/* Info */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: 14,
-            fontWeight: 600,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
+        <div style={{
+          fontSize: 14, fontWeight: 600,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
           {item.title}
         </div>
-        <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 3 }}>{item.category}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+          <span style={{
+            fontSize: 9.5, fontWeight: 800, padding: "2px 7px", borderRadius: 4,
+            background: badge.bg, color: "#fff", letterSpacing: 0.8, textTransform: "uppercase",
+          }}>{badge.label}</span>
+          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{item.category}</span>
+        </div>
       </div>
 
       {/* Bookmark */}
@@ -807,25 +798,66 @@ function ListRow({
         <button
           onClick={onToggleMyList}
           style={{
-            width: 30,
-            height: 30,
-            borderRadius: "50%",
-            border: "none",
+            width: 30, height: 30, borderRadius: "50%", border: "none",
             background: "transparent",
-            color: inMyList ? "#fbbf24" : "rgba(255,255,255,0.4)",
-            fontSize: 16,
-            cursor: "pointer",
-            flexShrink: 0,
+            color: inMyList ? "#fbbf24" : "rgba(255,255,255,0.3)",
+            fontSize: 16, cursor: "pointer", flexShrink: 0,
+            transition: "color 0.15s",
           }}
-        >
-          {inMyList ? "★" : "☆"}
-        </button>
+        >{inMyList ? "★" : "☆"}</button>
       )}
 
       {/* Play arrow */}
-      <div style={{ color: "var(--accent)", fontSize: 13, fontWeight: 700, opacity: hovered ? 1 : 0, transition: "opacity 0.12s" }}>
-        ▶
-      </div>
+      <div style={{
+        color: badge.bg, fontSize: 13, fontWeight: 800,
+        opacity: hovered ? 1 : 0, transition: "opacity 0.12s",
+      }}>▶</div>
+    </div>
+  );
+}
+
+// ─── Pagination ───────────────────────────────────────────────────────────────
+
+function Pagination({ page, pageCount, onChange }: { page: number; pageCount: number; onChange: (p: number) => void }) {
+  // Show max 7 page buttons with ellipsis
+  const getPages = (): (number | "…")[] => {
+    if (pageCount <= 9) return Array.from({ length: pageCount }, (_, i) => i);
+    const pages: (number | "…")[] = [0];
+    const left = Math.max(1, page - 2);
+    const right = Math.min(pageCount - 2, page + 2);
+    if (left > 1) pages.push("…");
+    for (let i = left; i <= right; i++) pages.push(i);
+    if (right < pageCount - 2) pages.push("…");
+    pages.push(pageCount - 1);
+    return pages;
+  };
+
+  const btn = (content: React.ReactNode, targetPage: number | null, active = false, disabled = false) => (
+    <button
+      key={String(content) + String(targetPage)}
+      onClick={() => targetPage !== null && onChange(targetPage)}
+      disabled={disabled}
+      style={{
+        minWidth: 34, height: 34, padding: "0 10px",
+        borderRadius: 7, border: `1px solid ${active ? "var(--accent)" : "rgba(255,255,255,0.1)"}`,
+        background: active ? "var(--accent)" : "rgba(255,255,255,0.05)",
+        color: active ? "#fff" : disabled ? "rgba(255,255,255,0.2)" : "var(--text-dim)",
+        fontSize: 13, fontWeight: active ? 700 : 500,
+        cursor: disabled ? "not-allowed" : "pointer",
+        transition: "all 0.12s",
+      }}
+    >{content}</button>
+  );
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      {btn("‹ Prev", page - 1, false, page === 0)}
+      {getPages().map((p, i) =>
+        p === "…"
+          ? <span key={`ellipsis-${i}`} style={{ color: "var(--text-dim)", padding: "0 4px" }}>…</span>
+          : btn(p + 1, p, p === page)
+      )}
+      {btn("Next ›", page + 1, false, page === pageCount - 1)}
     </div>
   );
 }
