@@ -1,49 +1,51 @@
-import { Channel } from "./playlist";
+// WCO-sourced item type (dub, sub, cartoon, movie)
+export type WcoType = "dub" | "sub" | "cartoon" | "movie";
 
-// Which catalog groups count as anime/animation. Matched case-insensitively as
-// substrings, because playlist group names vary a lot between sources
-// ("Animation", "Anime & Cartoons", "Kids/Toons", ...).
-const ANIME_GROUP_KEYWORDS = ["anime", "animation", "cartoon", "toon", "manga"];
-
-export function isAnimeChannel(ch: Channel): boolean {
-  const group = (ch.group || "").toLowerCase();
-  return ANIME_GROUP_KEYWORDS.some((k) => group.includes(k));
+export interface WcoItem {
+  id: string; // `${type}-${index}`
+  title: string;
+  url: string;
+  type: WcoType;
+  /** Category label shown in UI */
+  category: string;
 }
 
-export function selectAnime(channels: Channel[]): Channel[] {
-  return channels.filter(isAnimeChannel);
-}
+export const WCO_TYPE_LABELS: Record<WcoType, string> = {
+  dub: "Dubbed Anime",
+  sub: "Subbed Anime",
+  cartoon: "Cartoons",
+  movie: "Anime Movies",
+};
 
 export type AnimeSort =
   | "recommended"
   | "az"
   | "za"
   | "category"
-  | "newest"
-  | "oldest"
+  | "type-dub"
+  | "type-sub"
+  | "type-cartoon"
+  | "type-movie"
   | "shuffle"
-  | "artwork"
-  | "needs-artwork"
   | "my-list";
 
 export interface AnimeSortOption {
   value: AnimeSort;
   label: string;
-  /** Shown as a hint under the control so a sort is never a silent no-op. */
   note?: string;
 }
 
 export const ANIME_SORTS: AnimeSortOption[] = [
-  { value: "recommended", label: "Recommended", note: "Catalog order as provided by the source" },
+  { value: "recommended", label: "✦ Recommended", note: "Catalog order from WCO" },
   { value: "az", label: "Title A → Z" },
   { value: "za", label: "Title Z → A" },
-  { value: "category", label: "Category, then title" },
-  { value: "newest", label: "Newest added first", note: "Backend catalog order; demo playlists have no add-date" },
-  { value: "oldest", label: "Oldest added first", note: "Backend catalog order; demo playlists have no add-date" },
-  { value: "shuffle", label: "Shuffle", note: "Reshuffles each time you pick it" },
-  { value: "artwork", label: "With artwork first" },
-  { value: "needs-artwork", label: "Missing artwork first", note: "Useful for spotting gaps to fill" },
-  { value: "my-list", label: "In My List first" }
+  { value: "category", label: "By Category" },
+  { value: "type-dub", label: "Dubbed Anime first" },
+  { value: "type-sub", label: "Subbed Anime first" },
+  { value: "type-cartoon", label: "Cartoons first" },
+  { value: "type-movie", label: "Movies first" },
+  { value: "shuffle", label: "🔀 Shuffle", note: "Reshuffles each time you pick it" },
+  { value: "my-list", label: "★ My List first" },
 ];
 
 export type ArtworkFilter = "any" | "has" | "missing";
@@ -51,7 +53,7 @@ export type ViewMode = "grid" | "list";
 
 export interface AnimeFilters {
   query: string;
-  category: string;
+  category: WcoType | "all";
   letter: string;
   artwork: ArtworkFilter;
   onlyMyList: boolean;
@@ -64,7 +66,7 @@ export const DEFAULT_ANIME_FILTERS: AnimeFilters = {
   letter: "all",
   artwork: "any",
   onlyMyList: false,
-  sort: "recommended"
+  sort: "recommended",
 };
 
 export const LETTERS = ["#", ...("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""))];
@@ -74,77 +76,67 @@ function firstLetter(name: string): string {
   return /[A-Z]/.test(c) ? c : "#";
 }
 
-/**
- * `myListIds` drives both the "In My List" filter and its matching sort. It is
- * passed in rather than read here so this stays a pure function and remains
- * trivially testable.
- * `shuffleSeed` changes only when the user re-picks Shuffle, so re-renders do
- * not reorder the grid underneath them mid-scroll.
- */
 export function applyAnimeFilters(
-  channels: Channel[],
+  items: WcoItem[],
   filters: AnimeFilters,
   myListIds: Set<string>,
-  shuffleSeed: number
-): Channel[] {
-  let out = [...channels];
+  shuffleSeed: number,
+  artworkMap: Map<string, string | null>
+): WcoItem[] {
+  let out = [...items];
 
   const q = filters.query.trim().toLowerCase();
-  if (q) out = out.filter((c) => c.name.toLowerCase().includes(q) || (c.group || "").toLowerCase().includes(q));
+  if (q) out = out.filter((c) => c.title.toLowerCase().includes(q) || c.category.toLowerCase().includes(q));
 
-  if (filters.category !== "all") out = out.filter((c) => c.group === filters.category);
-  if (filters.letter !== "all") out = out.filter((c) => firstLetter(c.name) === filters.letter);
-  if (filters.artwork === "has") out = out.filter((c) => !!c.logo);
-  if (filters.artwork === "missing") out = out.filter((c) => !c.logo);
+  if (filters.category !== "all") out = out.filter((c) => c.type === filters.category);
+  if (filters.letter !== "all") out = out.filter((c) => firstLetter(c.title) === filters.letter);
+
+  if (filters.artwork === "has") out = out.filter((c) => !!artworkMap.get(c.id));
+  if (filters.artwork === "missing") out = out.filter((c) => !artworkMap.get(c.id));
   if (filters.onlyMyList) out = out.filter((c) => myListIds.has(c.id));
 
-  const byName = (a: Channel, b: Channel) => a.name.localeCompare(b.name);
+  const byName = (a: WcoItem, b: WcoItem) => a.title.localeCompare(b.title);
+
+  const typeOrder: Record<WcoType, number> = { dub: 0, sub: 1, cartoon: 2, movie: 3 };
 
   switch (filters.sort) {
     case "az":
       out.sort(byName);
       break;
     case "za":
-      out.sort((a, b) => b.name.localeCompare(a.name));
+      out.sort((a, b) => b.title.localeCompare(a.title));
       break;
     case "category":
-      out.sort((a, b) => (a.group || "").localeCompare(b.group || "") || byName(a, b));
+      out.sort((a, b) => a.category.localeCompare(b.category) || byName(a, b));
       break;
-    case "newest":
-      // Backend ids are SERIAL, so a larger numeric id really is a later row.
-      // Non-numeric ids (demo playlist) fall back to name so the order is at
-      // least stable and meaningful rather than arbitrary.
-      out.sort((a, b) => numericId(b) - numericId(a) || byName(a, b));
+    case "type-dub":
+      out.sort((a, b) => (a.type === "dub" ? -1 : b.type === "dub" ? 1 : 0) || byName(a, b));
       break;
-    case "oldest":
-      out.sort((a, b) => numericId(a) - numericId(b) || byName(a, b));
+    case "type-sub":
+      out.sort((a, b) => (a.type === "sub" ? -1 : b.type === "sub" ? 1 : 0) || byName(a, b));
       break;
-    case "artwork":
-      out.sort((a, b) => Number(!!b.logo) - Number(!!a.logo) || byName(a, b));
+    case "type-cartoon":
+      out.sort((a, b) => (a.type === "cartoon" ? -1 : b.type === "cartoon" ? 1 : 0) || byName(a, b));
       break;
-    case "needs-artwork":
-      out.sort((a, b) => Number(!!a.logo) - Number(!!b.logo) || byName(a, b));
-      break;
-    case "my-list":
-      out.sort((a, b) => Number(myListIds.has(b.id)) - Number(myListIds.has(a.id)) || byName(a, b));
+    case "type-movie":
+      out.sort((a, b) => (a.type === "movie" ? -1 : b.type === "movie" ? 1 : 0) || byName(a, b));
       break;
     case "shuffle":
       out = seededShuffle(out, shuffleSeed);
       break;
+    case "my-list":
+      out.sort((a, b) => Number(myListIds.has(b.id)) - Number(myListIds.has(a.id)) || byName(a, b));
+      break;
     case "recommended":
     default:
+      // Interleave: alternate dub → sub → cartoon → movie so each type appears throughout
+      out.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
       break;
   }
 
   return out;
 }
 
-function numericId(c: Channel): number {
-  const n = Number(c.id);
-  return Number.isFinite(n) ? n : -1;
-}
-
-// Deterministic for a given seed, so the order stays put across re-renders.
 function seededShuffle<T>(arr: T[], seed: number): T[] {
   const out = [...arr];
   let s = seed || 1;
