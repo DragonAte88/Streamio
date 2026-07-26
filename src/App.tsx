@@ -12,6 +12,7 @@ import Register from "./pages/Register";
 import Setup from "./pages/Setup";
 import Home from "./pages/Home";
 import LiveTV from "./pages/LiveTV";
+import Anime from "./pages/Anime";
 import Search from "./pages/Search";
 import Library from "./pages/Library";
 import Social from "./pages/Social";
@@ -66,6 +67,7 @@ export default function App() {
                 <Route element={<Layout />}>
                   <Route path="/" element={<Navigate to="/home" replace />} />
                   <Route path="/home" element={<Home />} />
+                  <Route path="/anime" element={<Anime />} />
                   <Route path="/live-tv" element={<LiveTV />} />
                   <Route path="/search" element={<Search />} />
                   {/* Dynamic M3U Categories */}
