@@ -100,46 +100,71 @@ export default function KidsShow() {
     })();
   }, [isMovie, showUrl]);
 
-  // ── Fetch episodes (non-movie) ──
+  // ── Fetch episodes (non-movie) — multi-phase with aggressive fallback ──
   const loadEpisodes = async (attempt = 0) => {
     if (isMovie) return;
     if (!showUrl && !showTitle) { nav(-1); return; }
     setLoading(true);
     setError(null);
-    setEpisodes([]);
+    if (attempt === 0) setEpisodes([]);
 
-    const msgs = [
+    const phases = [
       "Connecting to WCO…",
+      "Fetching episode list (HTTP fast-path)…",
       "Waiting for Cloudflare clearance…",
-      "Loading episode list…",
+      "Running browser fallback fetch…",
+      "Searching WCO catalog…",
     ];
-    let msgIdx = 0;
+    let phaseIdx = 0;
+    setLoadingMsg(phases[0]);
     const msgTimer = setInterval(() => {
-      msgIdx = Math.min(msgIdx + 1, msgs.length - 1);
-      setLoadingMsg(msgs[msgIdx]);
-    }, 5000);
+      phaseIdx = Math.min(phaseIdx + 1, phases.length - 1);
+      setLoadingMsg(phases[phaseIdx]);
+    }, 4000);
 
     try {
       let raw: { title: string; url: string }[] = [];
 
+      // Phase A: Direct URL fetch
       if (showUrl) {
-        raw = await window.wco.getEpisodes(showUrl);
+        setLoadingMsg("Fetching from show page (HTTP fast-path)…");
+        raw = await window.wco.getEpisodes(showUrl).catch(() => []);
       }
 
+      // Phase B: Title search fallback — find canonical URL
       if (raw.length === 0 && showTitle) {
-        setLoadingMsg("Searching WCO catalog for show...");
-        const results = await window.wco.search(showTitle, "all");
+        setLoadingMsg("Searching WCO catalog for show…");
+        const results = await window.wco.search(showTitle, "all").catch(() => []);
         if (results.length > 0) {
-          raw = await window.wco.getEpisodes(results[0].url);
+          setLoadingMsg(`Found "${results[0].title}" — loading episodes…`);
+          raw = await window.wco.getEpisodes(results[0].url).catch(() => []);
         }
+        // Try additional results if first one also empty
+        if (raw.length === 0 && results.length > 1) {
+          for (let i = 1; i < Math.min(results.length, 4) && raw.length === 0; i++) {
+            raw = await window.wco.getEpisodes(results[i].url).catch(() => []);
+          }
+        }
+      }
+
+      // Phase C: Retry with backoff (up to 3 total attempts)
+      if (raw.length === 0 && attempt < 2) {
+        clearInterval(msgTimer);
+        setLoadingMsg(`No episodes yet — retrying in 4s (attempt ${attempt + 2}/3)…`);
+        await new Promise(r => setTimeout(r, 4000));
+        return loadEpisodes(attempt + 1);
       }
 
       clearInterval(msgTimer);
 
-      if (raw.length === 0 && attempt < 2) {
-        setLoadingMsg(`Retrying… (attempt ${attempt + 2})`);
-        await new Promise(r => setTimeout(r, 3000));
-        return loadEpisodes(attempt + 1);
+      if (raw.length === 0) {
+        setError(
+          `No episodes found for "${showTitle}".\n\n` +
+          `WCO may be unavailable, or the show title could not be matched. ` +
+          `Try the ↺ Retry button, or search manually on the Anime page.`
+        );
+        setLoading(false);
+        return;
       }
 
       const processed: WCOEpisode[] = raw.map((ep, i) => ({

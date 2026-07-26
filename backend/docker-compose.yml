@@ -14,8 +14,11 @@ services:
       - secrets.env
     environment:
       POSTGRES_USER: streamio
-      POSTGRES_PASSWORD: ${PGPASSWORD}
       POSTGRES_DB: streamio
+      # POSTGRES_PASSWORD deliberately NOT listed here. Anything under
+      # `environment:` OVERRIDES env_file, and ${VAR} interpolation resolves to
+      # an empty string when no `.env` exists - so listing it here silently
+      # blanked the password that env_file had correctly supplied.
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks: [internal]
@@ -42,16 +45,13 @@ services:
       PGHOST: postgres
       PGPORT: 5432
       PGUSER: streamio
-      PGPASSWORD: ${PGPASSWORD}
       PGDATABASE: streamio
-      JWT_SECRET: ${JWT_SECRET}
-      TMDB_API_KEY: ${TMDB_API_KEY}
-      OMDB_API_KEY: ${OMDB_API_KEY}
-      FANART_API_KEY: ${FANART_API_KEY}
-      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
-      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
-      DISCORD_REDIRECT_URI: ${DISCORD_REDIRECT_URI}
       PORT: 4000
+      # Every secret (PGPASSWORD, JWT_SECRET, the API keys, the Discord
+      # credentials) arrives from env_file above and is deliberately NOT
+      # restated here. `environment:` wins over `env_file:`, and ${VAR}
+      # resolves to "" when no `.env` is present - which is exactly how the
+      # password kept getting blanked on machines that only had secrets.env.
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
