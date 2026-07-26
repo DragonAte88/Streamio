@@ -1,68 +1,85 @@
 #!/usr/bin/env bash
-# Deploy current backend + Discord bot source to the Oracle Cloud instances and
-# restart them. Run from the repo root after committing a change that touches
-# backend/ or the bot, so the servers match what was just released.
+# Deploy current backend + Discord bot source to all Oracle Cloud instances.
+# Run from the repo root after committing changes to backend/ or the bot.
 #
-#   bash scripts/deploy-infra.sh            # deploy everything
-#   bash scripts/deploy-infra.sh backend    # Flex-1 API only
-#   bash scripts/deploy-infra.sh bot        # Flex-2 Discord bot only
+#   bash scripts/deploy-infra.sh              # deploy to all three instances
+#   bash scripts/deploy-infra.sh backend      # Flex-1 (production API) only
+#   bash scripts/deploy-infra.sh staging      # Flex-3 (staging API) only
+#   bash scripts/deploy-infra.sh bot          # Flex-2 (Discord bot) only
+#   bash scripts/deploy-infra.sh api-all      # Flex-1 + Flex-3 API deploy
 #
-# Secrets are never copied by this script. Each server keeps its own env file
-# (Flex-1: ~/streamio-backend/secrets.env, Flex-2: ~/streamio-bot/.env) and
-# those are left untouched.
+# Secrets are NEVER copied by this script. Each server keeps its own local
+# env file and those files are never touched by deploys.
+#   Flex-1 (prod)    → ~/streamio-backend/secrets.env
+#   Flex-3 (staging) → ~/streamio-backend/secrets.env
+#   Flex-2 (bot)     → ~/streamio-bot/.env
 
 set -euo pipefail
 
+# ─── Instance Definitions ─────────────────────────────────────────────────────
+
 FLEX1_HOST="ubuntu@163.192.40.120"
 FLEX1_KEY="$HOME/.ssh/streamio_oracle_e5"
+FLEX1_URL="https://163-192-40-120.sslip.io"
+
 FLEX2_HOST="ubuntu@170.9.15.10"
 FLEX2_KEY="$HOME/.ssh/streamio_oracle_flex2"
+FLEX2_URL="https://170-9-15-10.sslip.io"
+
+FLEX3_HOST="ubuntu@138.2.232.225"
+FLEX3_KEY="$HOME/.ssh/streamio_oracle_flex3"
+FLEX3_URL="https://138-2-232-225.sslip.io"
 
 SSH_OPTS="-o ConnectTimeout=15 -o StrictHostKeyChecking=no"
 TARGET="${1:-all}"
 
-deploy_backend() {
-  echo "==> Flex-1: syncing backend/api"
-  # --delete keeps the server from accumulating files removed from the repo.
-  # secrets.env / .env are excluded so a deploy can never clobber credentials.
-  rsync -az --delete \
-    --exclude 'node_modules' \
-    --exclude 'secrets.env' \
-    --exclude '.env' \
-    -e "ssh -i $FLEX1_KEY $SSH_OPTS" \
-    backend/api/ "$FLEX1_HOST:~/streamio-backend/api/"
+# ─── Backend Deploy Helper ────────────────────────────────────────────────────
 
-  rsync -az -e "ssh -i $FLEX1_KEY $SSH_OPTS" \
-    backend/docker-compose.yml "$FLEX1_HOST:~/streamio-backend/docker-compose.yml"
+deploy_api_to() {
+  local label="$1"
+  local host="$2"
+  local key="$3"
+  local health_url="$4"
 
-  echo "==> Flex-1: rebuilding and restarting API"
-  ssh -i "$FLEX1_KEY" $SSH_OPTS "$FLEX1_HOST" \
+  echo "==> ${label}: syncing backend/api"
+  scp -i "$key" $SSH_OPTS -r backend/api/ "${host}:~/streamio-backend/api/"
+  scp -i "$key" $SSH_OPTS backend/docker-compose.yml "${host}:~/streamio-backend/docker-compose.yml"
+
+  echo "==> ${label}: rebuilding and restarting API container"
+  ssh -i "$key" $SSH_OPTS "$host" \
     'cd ~/streamio-backend && docker compose up -d --build api'
 
-  echo "==> Flex-1: waiting for health"
+  echo "==> ${label}: waiting for health check..."
   for i in $(seq 1 20); do
-    if curl -fsS -m 8 "https://163-192-40-120.sslip.io/health" >/dev/null 2>&1; then
-      echo "    healthy: $(curl -sS -m 8 https://163-192-40-120.sslip.io/health)"
+    if curl -fsS -m 8 "${health_url}/health" >/dev/null 2>&1; then
+      echo "    ✅ ${label} healthy: $(curl -sS -m 8 ${health_url}/health)"
       return 0
     fi
     sleep 3
   done
-  echo "    ERROR: backend did not come back healthy" >&2
-  ssh -i "$FLEX1_KEY" $SSH_OPTS "$FLEX1_HOST" \
+
+  echo "    ❌ ERROR: ${label} did not come back healthy" >&2
+  ssh -i "$key" $SSH_OPTS "$host" \
     'docker logs --tail 30 streamio-backend-api-1' >&2 || true
   return 1
+}
+
+# ─── Individual Deploy Functions ──────────────────────────────────────────────
+
+deploy_backend() {
+  deploy_api_to "Flex-1 (Production API)" "$FLEX1_HOST" "$FLEX1_KEY" "$FLEX1_URL"
+}
+
+deploy_staging() {
+  deploy_api_to "Flex-3 (Staging API)" "$FLEX3_HOST" "$FLEX3_KEY" "$FLEX3_URL"
 }
 
 deploy_bot() {
   echo "==> Flex-2: syncing Discord bot"
   ssh -i "$FLEX2_KEY" $SSH_OPTS "$FLEX2_HOST" 'mkdir -p ~/streamio-bot'
-  rsync -az --delete \
-    --exclude 'node_modules' \
-    --exclude '.env' \
-    -e "ssh -i $FLEX2_KEY $SSH_OPTS" \
-    backend/bot/ "$FLEX2_HOST:~/streamio-bot/"
+  scp -i "$FLEX2_KEY" $SSH_OPTS -r backend/bot/ "${FLEX2_HOST}:~/streamio-bot/"
 
-  echo "==> Flex-2: rebuilding and restarting bot"
+  echo "==> Flex-2: rebuilding and restarting bot container"
   ssh -i "$FLEX2_KEY" $SSH_OPTS "$FLEX2_HOST" \
     'cd ~/streamio-bot && docker compose up -d --build'
 
@@ -72,11 +89,38 @@ deploy_bot() {
     'docker logs --tail 15 streamio-bot-bot-1 2>&1'
 }
 
+# ─── Health Status Summary ────────────────────────────────────────────────────
+
+health_all() {
+  echo ""
+  echo "==> Oracle Cloud Status Summary"
+  for pair in \
+    "Flex-1 (Production API)|${FLEX1_URL}/health" \
+    "Flex-2 (Discord Bot)|${FLEX2_URL}/health" \
+    "Flex-3 (Staging API)|${FLEX3_URL}/health"; do
+    local name="${pair%%|*}"
+    local url="${pair##*|}"
+    local status
+    if status=$(curl -fsS -m 8 "$url" 2>/dev/null); then
+      echo "    ✅ ${name}: ${status}"
+    else
+      echo "    ❌ ${name}: unreachable"
+    fi
+  done
+  echo ""
+}
+
+# ─── Entry Point ─────────────────────────────────────────────────────────────
+
 case "$TARGET" in
-  backend) deploy_backend ;;
-  bot)     deploy_bot ;;
-  all)     deploy_backend; deploy_bot ;;
-  *) echo "usage: $0 [all|backend|bot]" >&2; exit 2 ;;
+  backend)  deploy_backend ;;
+  staging)  deploy_staging ;;
+  bot)      deploy_bot ;;
+  api-all)  deploy_backend; deploy_staging ;;
+  all)      deploy_backend; deploy_bot; deploy_staging ;;
+  health)   health_all; exit 0 ;;
+  *) echo "usage: $0 [all|backend|staging|bot|api-all|health]" >&2; exit 2 ;;
 esac
 
+health_all
 echo "==> Done."

@@ -60,9 +60,9 @@ export default function DevDashboard() {
       }
     };
     const load = () => {
-      check("Flex-1 (API + Postgres)", "https://163-192-40-120.sslip.io/health");
-      check("Flex-2 (Discord bot, idle)", "https://170-9-15-10.sslip.io/health");
-      check("Flex-3 (blank/reserved)", "https://138-2-232-225.sslip.io/health");
+      check("Flex-1 (Production API)", "https://163-192-40-120.sslip.io/health");
+      check("Flex-2 (Discord Bot Host)", "https://170-9-15-10.sslip.io/health");
+      check("Flex-3 (Staging API)", "https://138-2-232-225.sslip.io/health");
     };
     load();
     const interval = setInterval(load, 15000);
