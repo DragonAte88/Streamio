@@ -46,4 +46,18 @@ function isConnected() {
   return { connected: ready, username: client?.user?.username || null };
 }
 
-module.exports = { init, setWatching, clear, isConnected };
+// The RPC client holds an open IPC socket to the local Discord app. That socket
+// is a live libuv handle - if it is never closed, the Electron main process
+// stays alive after every window is gone and the app never actually exits.
+// Must be called during shutdown.
+function destroy() {
+  ready = false;
+  startTimestamp = null;
+  if (!client) return;
+  try {
+    client.destroy();
+  } catch {}
+  client = null;
+}
+
+module.exports = { init, setWatching, clear, isConnected, destroy };

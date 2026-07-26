@@ -203,10 +203,23 @@ async function getList(type) {
   }
 }
 
+// This module's hidden window is still a real BrowserWindow. An open window -
+// even one that is never shown - prevents Electron's "window-all-closed" event
+// from firing, so without this the app process survives after the user closes
+// the visible window. Must be called during shutdown.
+function destroy() {
+  if (!scraperWin) return;
+  try {
+    if (!scraperWin.isDestroyed()) scraperWin.destroy();
+  } catch {}
+  scraperWin = null;
+}
+
 module.exports = {
   init,
   search,
   getEpisodes,
   extractVideo,
-  getList
+  getList,
+  destroy
 };

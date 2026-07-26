@@ -9,12 +9,20 @@ const wcoScraper = require("./wcoScraper");
 
 app.disableHardwareAcceleration();
 
+// Only one Streamio instance may ever run. A second instance shares nothing
+// with the first (separate session/auth state), which is why opening a second
+// window appeared "logged out" - they are entirely separate processes, not two
+// views of one app. Rather than try to sync them, refuse the second one.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
 let mainWindow;
 let videoWindow;
 let controlsWindow;
 let mpv;
+let updaterHandle = null;
 let lastBounds = null;
 let closing = false;
+let quitting = false;
 
 // Real evidence from a verbose mpv log: the GPU render pipeline runs
 // continuously and correctly (per-frame shader timing for the full session) -
@@ -33,6 +41,84 @@ const isDev = process.env.NODE_ENV === "development";
 
 function alive(win) {
   return win && !win.isDestroyed();
+}
+
+// Shown only in a second instance: tells the user why this window is refusing
+// to start, counts down, then hard-exits itself.
+const ALREADY_RUNNING_SECONDS = 5;
+
+function showAlreadyRunningAndExit() {
+  const notice = new BrowserWindow({
+    width: 460,
+    height: 220,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    frame: false,
+    alwaysOnTop: true,
+    backgroundColor: "#0b0b0f",
+    title: "Streamio"
+  });
+  notice.setMenu(null);
+
+  const html = `
+    <body style="margin:0;height:100%;display:flex;flex-direction:column;align-items:center;
+                 justify-content:center;background:#0b0b0f;color:#fff;
+                 font-family:'Segoe UI',sans-serif;user-select:none">
+      <div style="font-size:17px;font-weight:600">You already have a process open.</div>
+      <div style="font-size:13px;color:#9a9aa6;margin-top:10px;text-align:center;max-width:360px">
+        Streamio is already running. This window will close automatically.
+      </div>
+      <div id="c" style="font-size:34px;font-weight:800;margin-top:18px">${ALREADY_RUNNING_SECONDS}</div>
+      <script>
+        let n = ${ALREADY_RUNNING_SECONDS};
+        setInterval(() => {
+          n -= 1;
+          if (n >= 0) document.getElementById("c").textContent = n;
+        }, 1000);
+      </script>
+    </body>`;
+  notice.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+
+  setTimeout(() => {
+    // app.exit(), not app.quit() - quit is cooperative and can be blocked by a
+    // pending handle. This process must go away unconditionally.
+    app.exit(0);
+  }, ALREADY_RUNNING_SECONDS * 1000);
+}
+
+// Single teardown path for every exit route (window close, quit, second-instance
+// refusal). Anything holding a live handle must be released here or the process
+// survives with no windows - which is exactly the "closing the X leaves Electron
+// running in Task Manager" bug.
+function teardown() {
+  if (mpv) {
+    try {
+      mpv.stop();
+    } catch {}
+    mpv = null;
+  }
+  if (updaterHandle) {
+    try {
+      updaterHandle.stopAutoCheck();
+    } catch {}
+    updaterHandle = null;
+  }
+  try {
+    discordRpc.destroy();
+  } catch {}
+  try {
+    wcoScraper.destroy();
+  } catch {}
+  for (const win of [videoWindow, controlsWindow]) {
+    if (alive(win)) {
+      try {
+        win.destroy();
+      } catch {}
+    }
+  }
+  videoWindow = null;
+  controlsWindow = null;
 }
 
 function createMainWindow() {
@@ -65,11 +151,15 @@ function createMainWindow() {
     closing = true;
   });
 
+  // Tear everything down here, NOT in "window-all-closed". Some of what
+  // teardown() releases are themselves windows (the video/controls windows and
+  // the scraper's hidden window) - and an open window is precisely what stops
+  // "window-all-closed" from firing. Waiting for that event to clean up windows
+  // is circular: it can never arrive while they are still open, so the process
+  // would linger with no visible UI.
   mainWindow.on("closed", () => {
     mainWindow = null;
-    if (mpv) mpv.stop();
-    if (alive(videoWindow)) videoWindow.close();
-    if (alive(controlsWindow)) controlsWindow.close();
+    teardown();
   });
 
   mainWindow.on("move", () => applyVideoBounds());
@@ -132,6 +222,19 @@ function createControlsWindow() {
   controlsWindow.loadFile(path.join(__dirname, "playerControls.html"));
 }
 
+// A second instance never reaches normal startup - it shows the notice window
+// and exits itself. The first instance gets focused instead so the user ends up
+// looking at the app they already had open.
+if (!gotSingleInstanceLock) {
+  app.whenReady().then(showAlreadyRunningAndExit);
+} else {
+  app.on("second-instance", () => {
+    if (alive(mainWindow)) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+
 app.whenReady().then(() => {
   createMainWindow();
   createVideoWindow();
@@ -158,6 +261,7 @@ app.whenReady().then(() => {
   ipcMain.handle("discord:isConnected", () => discordRpc.isConnected());
 
   const updater = autoUpdaterModule.init(mainWindow);
+  updaterHandle = updater; // so teardown() can stop the 60s check interval
   ipcMain.handle("updater:check", () => updater.check());
   ipcMain.handle("updater:download", () => updater.download());
   ipcMain.handle("updater:install", async () => {
@@ -230,6 +334,7 @@ app.whenReady().then(() => {
     if (alive(mainWindow)) mainWindow.webContents.send("player:back");
   });
 });
+} // end single-instance guard
 
 function applyVideoBounds() {
   if (closing || !lastBounds || !alive(videoWindow) || !alive(mainWindow)) return;
@@ -261,7 +366,21 @@ function applyVideoBounds() {
   }
 }
 
+// Runs once, before windows are gone, on every quit route.
+app.on("before-quit", () => {
+  quitting = true;
+  teardown();
+});
+
 app.on("window-all-closed", () => {
-  if (mpv) mpv.stop();
+  teardown();
   if (process.platform !== "darwin") app.quit();
+});
+
+// Last-resort backstop. If some handle we do not own is still keeping the event
+// loop alive a moment after quit was requested, exit the process outright rather
+// than leaving an invisible Streamio running in Task Manager forever. app.exit()
+// bypasses the cooperative quit path that a stuck handle can block.
+app.on("quit", () => {
+  setTimeout(() => process.exit(0), 1500).unref?.();
 });
