@@ -433,3 +433,75 @@ export async function acceptInvite(token: string, inviteId: number): Promise<{ r
 export async function declineInvite(token: string, inviteId: number) {
   await fetch(`${API_BASE}/social/invites/${inviteId}/decline`, { method: "POST", headers: authHeaders(token) });
 }
+
+// ── Watch progress, favorites, and recommendation signal ────────────────────
+
+export interface ContinueItem extends ApiChannel {
+  position_seconds: number;
+  duration_seconds: number;
+  updated_at: string;
+}
+
+export interface WatchStats {
+  byGroup: { group_name: string; plays: number; seconds: number }[];
+  totals: { plays: number; distinct_channels: number; seconds: number };
+}
+
+export interface FriendActivityItem extends ApiChannel {
+  friend_id: number;
+  username: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
+  watched_at: string;
+}
+
+/** Starts a viewing session; returns the row id used for progress pings. */
+export async function startHistoryEntry(token: string, channelId: string): Promise<number | null> {
+  const res = await fetch(`${API_BASE}/watchlist/${channelId}/history`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data?.historyId ?? null;
+}
+
+export async function reportProgress(token: string, historyId: number, position: number, duration?: number) {
+  await fetch(`${API_BASE}/watchlist/history/${historyId}/progress`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ position, duration })
+  }).catch(() => {});
+}
+
+export async function fetchContinueWatching(token: string): Promise<ContinueItem[]> {
+  const res = await fetch(`${API_BASE}/watchlist/continue`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error("Failed to load continue watching");
+  return (await res.json()).channels;
+}
+
+export async function fetchWatchStats(token: string): Promise<WatchStats> {
+  const res = await fetch(`${API_BASE}/watchlist/stats`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error("Failed to load watch stats");
+  return res.json();
+}
+
+export async function fetchFavorites(token: string): Promise<ApiChannel[]> {
+  const res = await fetch(`${API_BASE}/watchlist/favorites`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error("Failed to load favorites");
+  return (await res.json()).channels;
+}
+
+export async function addFavorite(token: string, channelId: string) {
+  await fetch(`${API_BASE}/watchlist/favorites/${channelId}`, { method: "POST", headers: authHeaders(token) });
+}
+
+export async function removeFavorite(token: string, channelId: string) {
+  await fetch(`${API_BASE}/watchlist/favorites/${channelId}`, { method: "DELETE", headers: authHeaders(token) });
+}
+
+export async function fetchFriendsActivity(token: string): Promise<FriendActivityItem[]> {
+  const res = await fetch(`${API_BASE}/watchlist/friends-activity`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error("Failed to load friends activity");
+  return (await res.json()).items;
+}

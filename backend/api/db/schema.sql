@@ -68,6 +68,26 @@ CREATE TABLE IF NOT EXISTS watch_history (
   watched_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Resume tracking. watch_history originally recorded only that something was
+-- played, which is too thin a signal for "Continue Watching" or for weighting
+-- recommendations - a channel opened for 4 seconds looked identical to one
+-- watched for an hour.
+ALTER TABLE watch_history ADD COLUMN IF NOT EXISTS position_seconds INTEGER;
+ALTER TABLE watch_history ADD COLUMN IF NOT EXISTS duration_seconds INTEGER;
+-- Rows are updated in place as playback progresses, so the last write wins.
+ALTER TABLE watch_history ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS watch_history_user_time_idx ON watch_history (user_id, watched_at DESC);
+
+-- Favorites: deliberately separate from watchlist ("My List"). Watchlist is
+-- "plan to watch"; favorites is "quick access to things I return to".
+CREATE TABLE IF NOT EXISTS favorites (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, channel_id)
+);
+
 -- Social: friend requests + accepted friendships
 CREATE TABLE IF NOT EXISTS friend_requests (
   id SERIAL PRIMARY KEY,

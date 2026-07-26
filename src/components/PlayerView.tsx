@@ -3,6 +3,8 @@ import { useLocation } from "react-router-dom";
 import type { Channel } from "../lib/playlist";
 import { useSettings } from "../lib/SettingsContext";
 import { usePlayback } from "../lib/PlaybackContext";
+import { useAuth } from "../lib/auth";
+import { startHistoryEntry, reportProgress } from "../lib/api";
 
 const ROUTE_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/home",     label: "Home" },
@@ -24,6 +26,7 @@ function labelForPath(pathname: string): string {
 export default function PlayerView({ channel, onClose }: { channel: Channel; onClose: () => void }) {
   const { settings } = useSettings();
   const { mode, kind, toggleMode } = usePlayback();
+  const { token } = useAuth();
   const location = useLocation();
   const areaRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,6 +100,41 @@ export default function PlayerView({ channel, onClose }: { channel: Channel; onC
       window.discord.clear();
     };
   }, [channel.url]); // Re-run when the stream URL changes (next episode)
+
+  // Progress reporting. One history row per viewing session, updated in place
+  // every 15s, so Continue Watching has a real resume point. Live channels are
+  // skipped: they have no duration, so "resume" is meaningless for them.
+  useEffect(() => {
+    if (!token || kind === "live") return;
+
+    let historyId: number | null = null;
+    let lastPos = 0;
+    let lastDur: number | undefined;
+    let stopped = false;
+
+    const offProps = window.player.onPropertyChange((msg: any) => {
+      if (msg.name === "time-pos" && typeof msg.data === "number") lastPos = msg.data;
+      if (msg.name === "duration" && typeof msg.data === "number") lastDur = msg.data;
+    });
+
+    startHistoryEntry(token, String(channel.id))
+      .then((id) => {
+        if (!stopped) historyId = id;
+      })
+      .catch(() => {});
+
+    const flush = () => {
+      if (historyId && lastPos > 0) reportProgress(token, historyId, lastPos, lastDur);
+    };
+    const interval = setInterval(flush, 15000);
+
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+      offProps();
+      flush(); // final write on close, so the resume point is where they left off
+    };
+  }, [channel.url, token, kind]);
 
   // Report the video div bounds to main process so MPV knows where to paint.
   // Re-runs on mode change: switching between docked and fullscreen moves the

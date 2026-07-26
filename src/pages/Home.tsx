@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import HeroBanner from "../components/HeroBanner";
 import ContentRow from "../components/ContentRow";
+import RecommendedRows from "../components/RecommendedRows";
 import WcoCard from "../components/WcoCard";
 import SectionTabs from "../components/SectionTabs";
 import FilterBar, { applyFilters, FilterState } from "../components/FilterBar";
@@ -51,7 +52,12 @@ export default function Home() {
       ) : (
         <>
           <HeroBanner channel={featured} onPlay={play} />
-          
+
+          {/* Personalised + social rows: Continue Watching, For You, Friends
+              are watching, taste-based categories, Recently Watched. Renders
+              nothing when there is no real signal to build them from. */}
+          <RecommendedRows />
+
           {wcoCartoons.length > 0 && (
             <div className="row-section">
               <div className="row-title">Popular Cartoons (On Demand)</div>

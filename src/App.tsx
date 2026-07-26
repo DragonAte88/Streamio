@@ -27,6 +27,8 @@ import AdminUsers from "./pages/admin/AdminUsers";
 import AdminAssets from "./pages/admin/AdminAssets";
 import DevDashboard from "./pages/admin/DevDashboard";
 import MyList from "./pages/MyList";
+import ContinueWatching from "./pages/library/ContinueWatching";
+import Favorites from "./pages/library/Favorites";
 import Playlists from "./pages/Playlists";
 import PlaylistAdd from "./pages/PlaylistAdd";
 import RecentlyWatched from "./pages/RecentlyWatched";
@@ -93,6 +95,8 @@ export default function App() {
                     <Route path="my-list" element={<MyList />} />
                     <Route path="playlists" element={<Playlists />} />
                     <Route path="playlists/add" element={<PlaylistAdd />} />
+                    <Route path="continue-watching" element={<ContinueWatching />} />
+                    <Route path="favorites" element={<Favorites />} />
                     <Route path="recently-watched" element={<RecentlyWatched />} />
                     {LIBRARY_PLACEHOLDERS.map((r) => (
                       <Route
