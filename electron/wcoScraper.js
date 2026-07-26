@@ -351,7 +351,63 @@ async function search(query, filterType = "all") {
   });
 }
 
-// ─── Episodes ──────────────────────────────────────────────────────────────────
+/**
+ * Direct WatchNixtoons2 HTTP episode parser.
+ * Extracts episode links from HTML source using WatchNixtoons2 regex boundaries.
+ */
+async function fetchEpisodesDirect(showUrl) {
+  try {
+    const fullUrl = normalizeUrl(showUrl) || showUrl;
+    const res = await fetch(fullUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": BASE_URL + "/",
+      }
+    });
+
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // WatchNixtoons2 catlist-listview section boundary extraction
+    let scopeHtml = html;
+    const catIdx = html.indexOf('id="catlist-listview"') !== -1 ? html.indexOf('id="catlist-listview"') : html.indexOf('catlist-listview');
+    if (catIdx !== -1) {
+      scopeHtml = html.slice(catIdx);
+      const endIdx = scopeHtml.indexOf('</div>\n</div>') !== -1 ? scopeHtml.indexOf('</div>\n</div>') : scopeHtml.indexOf('</section>');
+      if (endIdx !== -1) scopeHtml = scopeHtml.slice(0, endIdx);
+    }
+
+    const matches = [];
+    const linkRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi;
+    let match;
+
+    while ((match = linkRegex.exec(scopeHtml)) !== null) {
+      const linkHref = match[1];
+      const linkTitle = match[2].trim();
+
+      if (linkTitle.length > 0 && linkHref && !linkHref.includes('#') && !linkHref.includes('/category/')) {
+        const norm = normalizeUrl(linkHref) || linkHref;
+        if (norm && (norm.includes('-episode-') || norm.includes('/episode/') || norm.includes('wcostream') || norm.includes('watchnixtoons'))) {
+          matches.push({ title: linkTitle, url: norm });
+        }
+      }
+    }
+
+    const seen = new Set();
+    const unique = [];
+    for (const item of matches) {
+      if (!seen.has(item.url)) {
+        seen.add(item.url);
+        unique.push(item);
+      }
+    }
+
+    return unique.length > 0 ? unique : null;
+  } catch (err) {
+    console.warn("[wcoScraper] Direct HTTP episode fetch error:", err.message);
+    return null;
+  }
+}
 
 async function getEpisodes(showUrl) {
   const url = normalizeUrl(showUrl) || showUrl;
@@ -365,41 +421,51 @@ async function getEpisodes(showUrl) {
     delete diskCacheData.episodes[url];
   }
 
+  // Phase 0: WatchNixtoons2 Fast-Path Direct HTTP Parsing (Sub-second execution)
+  const fastEpisodes = await fetchEpisodesDirect(url).catch(() => null);
+  if (fastEpisodes && fastEpisodes.length > 0) {
+    const normalised = fastEpisodes
+      .map(e => ({ title: e.title, url: normalizeUrl(e.url) || e.url }))
+      .filter(e => e.url)
+      .reverse();
+
+    if (normalised.length > 0) {
+      diskCacheData.episodes[url] = { data: normalised, timestamp: Date.now() };
+      saveDiskCache();
+      console.log(`[wcoScraper] WatchNixtoons2 Fast-Path fetched ${normalised.length} episodes for:`, url);
+      return normalised;
+    }
+  }
+
   return withNavLock(async () => {
     ensureWindow();
-    console.log("[wcoScraper] Fetching episodes for:", url);
+    console.log("[wcoScraper] Fetching episodes via browser window for:", url);
 
     await navigateTo(url, NAV_SETTLE_MS);
 
     const eps = await pollUntil(`
       (function() {
-        const EPISODE_SELECTORS = [
-          '#catlist-listview ul li a', '#catlist-listview a',
-          '.cat-eps a', '#episode_related a',
-          '.episodes-area a', '.eplist a', '.episode-list a',
-          'ul.listing.items.lists a', 'ul.listing a', '.list-episode a',
-          'div[id*="catlist"] a', 'div[class*="eps"] a', 'div[class*="episode"] a',
-          'a[href*="-episode-"]', 'a[href*="/episode/"]',
-        ];
+        const SELECTOR_COMBO = '#catlist-listview a, .cat-eps a, #episode_related a, .episodes-area a, .eplist a, .episode-list a, ul.listing a, .list-episode a, div[id*="catlist"] a, div[class*="eps"] a, div[class*="episode"] a, a[href*="-episode-"], a[href*="/episode/"]';
 
-        for (const sel of EPISODE_SELECTORS) {
-          const els = Array.from(document.querySelectorAll(sel));
-          if (els.length === 0) continue;
+        const els = Array.from(document.querySelectorAll(SELECTOR_COMBO));
+        if (els.length === 0) return null;
 
-          const items = els.map(a => ({
-            title: (a.textContent || '').trim(),
-            url:   a.href || a.getAttribute('href') || ''
-          })).filter(x =>
-            x.title.length > 0 && x.url &&
-            (x.url.includes('wcostream') || x.url.includes('watchnixtoons') ||
-             x.url.includes('wcoforever') || x.url.includes('/anime/') ||
-             x.url.includes('/cartoon/') || x.url.includes('-episode-') ||
-             x.url.includes('/episode/'))
-          );
+        const seen = new Set();
+        const items = [];
 
-          if (items.length > 0) return items;
+        for (const a of els) {
+          const title = (a.textContent || '').trim();
+          const href = a.href || a.getAttribute('href') || '';
+          if (!title || !href || href.includes('#') || href.includes('/category/')) continue;
+
+          const norm = href.startsWith('/') ? 'https://www.wcostream.tv' + href : href;
+          if (norm && !seen.has(norm) && (norm.includes('wcostream') || norm.includes('watchnixtoons') || norm.includes('wcoforever') || norm.includes('-episode-') || norm.includes('/episode/'))) {
+            seen.add(norm);
+            items.push({ title, url: norm });
+          }
         }
-        return null;
+
+        return items.length > 0 ? items : null;
       })()
     `, EPISODE_TIMEOUT);
 
@@ -412,7 +478,6 @@ async function getEpisodes(showUrl) {
         .reverse(); // Chronological
     }
 
-    // Fallback: If 0 items parsed from current URL, clear any corrupt empty disk entry
     if (normalised.length === 0 && existing) {
       delete diskCacheData.episodes[url];
       saveDiskCache();
