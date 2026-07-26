@@ -8,8 +8,9 @@ import { setPresence, fetchInvites, PresenceStatus } from "../lib/api";
 
 const NAV = [
   { path: "/home", label: "Home", icon: "🏠" },
-  { path: "/anime", label: "Anime", icon: "🎌" },
   { path: "/search", label: "Search", icon: "🔍" },
+  { path: "/anime", label: "Anime", icon: "🎌" },
+  { path: "/live-tv", label: "Live TV", icon: "📡" },
   { path: "/library", label: "Your Library", icon: "📚" },
   { path: "/social", label: "Social", icon: "💬" },
   { path: "/settings/general", label: "Settings", icon: "⚙️" }
