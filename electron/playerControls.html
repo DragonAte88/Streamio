@@ -40,6 +40,36 @@
   input[type="range"] { accent-color: #e6392f; }
   .center-msg { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #999; font-size: 14px; pointer-events: none; }
   .error { color: #e6392f; }
+
+  /* Track / quality menus. Anchored upward from their button since the
+     controls sit at the bottom of the window. */
+  .menu-wrap { position: relative; }
+  .text-btn {
+    background: rgba(255,255,255,0.10); border: none; color: #fff; cursor: pointer;
+    font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 6px;
+    display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .text-btn:hover { background: rgba(255,255,255,0.20); }
+  .text-btn.on { background: #e6392f; }
+  .popup {
+    position: absolute; bottom: 40px; left: 0; min-width: 230px; max-width: 330px;
+    max-height: 300px; overflow-y: auto; background: #14141b; border: 1px solid #2a2a35;
+    border-radius: 8px; padding: 6px; box-shadow: 0 10px 40px rgba(0,0,0,0.65); display: none;
+  }
+  .popup.open { display: block; }
+  .popup-head {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #8a8a99;
+    padding: 6px 10px 4px;
+  }
+  .popup-item {
+    padding: 7px 10px; border-radius: 5px; cursor: pointer; font-size: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .popup-item:hover { background: rgba(255,255,255,0.08); }
+  .popup-item.active { background: rgba(230,57,47,0.20); color: #ff8b84; }
+  .popup-item .sub { font-size: 10px; color: #8a8a99; }
+  .popup-empty { padding: 10px; font-size: 11px; color: #8a8a99; line-height: 1.5; }
+  .popup-sep { height: 1px; background: #24242f; margin: 5px 0; }
 </style>
 </head>
 <body>
@@ -65,6 +95,23 @@
         <button class="icon-btn" id="playPause">❚❚</button>
         <span style="font-size:12px;color:#ccc">🔊</span>
         <input type="range" id="volume" min="0" max="130" value="100" style="width:100px" />
+
+        <div style="flex:1"></div>
+
+        <div class="menu-wrap" id="subWrap">
+          <button class="text-btn" id="subBtn" title="Subtitles">💬 <span id="subLabel">Subtitles</span></button>
+          <div class="popup" id="subPopup"></div>
+        </div>
+
+        <div class="menu-wrap" id="audioWrap">
+          <button class="text-btn" id="audioBtn" title="Audio track">🎧 <span id="audioLabel">Audio</span></button>
+          <div class="popup" id="audioPopup"></div>
+        </div>
+
+        <div class="menu-wrap" id="qualityWrap">
+          <button class="text-btn" id="qualityBtn" title="Quality / codec">⚙ <span id="qualityLabel">Quality</span></button>
+          <div class="popup" id="qualityPopup"></div>
+        </div>
       </div>
     </div>
   </div>
