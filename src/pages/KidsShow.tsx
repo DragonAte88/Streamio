@@ -7,20 +7,57 @@ import DownloadModal from "../components/DownloadModal";
 
 type WCOEpisode = { title: string; url: string; season: string; epNum: number };
 
-// ─── Season detection ──────────────────────────────────────────────────────────
+// ─── Season & episode number detection ──────────────────────────────────────────
 
-function detectSeason(title: string): string {
-  const m =
-    title.match(/\b(?:Season|Book|Part|Arc|Series|S)\s*0*(\d+)/i) ||
-    title.match(/\bSeason\s*(\d+)/i);
-  if (m) return `Season ${m[1]}`;
+/**
+ * Detect the season label for an episode.
+ * WCO titles look like: "American Dad! Season 22 Episode 11 A Donkey's Shame"
+ * WCO URLs look like:   ".../american-dad-season-22-episode-11-a-donkeys-shame"
+ * We try the title first, then fall back to the URL slug.
+ */
+function detectSeason(title: string, url = ""): string {
+  // Title-based: "Season 22", "S22", "Book 3", "Part 2", etc.
+  const titleMatch =
+    title.match(/\bSeason\s*(\d+)/i) ||
+    title.match(/\bBook\s*(\d+)/i) ||
+    title.match(/\bPart\s*(\d+)/i) ||
+    title.match(/\bArc\s*(\d+)/i) ||
+    title.match(/\bSeries\s*(\d+)/i) ||
+    title.match(/\bS(\d{1,3})\s*E\d/i);   // S22E11 format
+  if (titleMatch) return `Season ${parseInt(titleMatch[1], 10)}`;
+
+  // URL slug-based: "-season-22-"
+  const urlMatch = url.match(/[\-_]season[\-_](\d+)/i);
+  if (urlMatch) return `Season ${parseInt(urlMatch[1], 10)}`;
+
+  // Specials
   if (/\b(?:Movie|Film|Special|OVA|ONA|Short)\b/i.test(title)) return "Movies & Specials";
+
   return "Season 1";
 }
 
-function parseEpisodeNumber(title: string): number {
-  const m = title.match(/(?:Ep(?:isode)?\.?\s*|#\s*)(\d+)/i) || title.match(/(\d+)\s*$/);
-  return m ? parseInt(m[1], 10) : 0;
+/**
+ * Parse episode number from WCO title or URL slug.
+ * Title: "American Dad! Season 22 Episode 11 A Donkey's Shame" → 11
+ * URL:   ".../american-dad-season-22-episode-11-a-donkeys-shame" → 11
+ */
+function parseEpisodeNumber(title: string, url = ""): number {
+  // Title-based: "Episode 11", "Ep. 11", "#11"
+  const titleMatch =
+    title.match(/\bEpisode\s*(\d+)/i) ||
+    title.match(/\bEp\.?\s*(\d+)/i) ||
+    title.match(/#\s*(\d+)/i);
+  if (titleMatch) return parseInt(titleMatch[1], 10);
+
+  // URL slug-based: "-episode-11-"
+  const urlMatch = url.match(/[\-_]episode[\-_](\d+)/i);
+  if (urlMatch) return parseInt(urlMatch[1], 10);
+
+  // Last number in title as fallback
+  const lastNum = title.match(/(\d+)\s*$/);
+  if (lastNum) return parseInt(lastNum[1], 10);
+
+  return 0;
 }
 
 function isMovieType(type?: string, url?: string, title?: string): boolean {
@@ -108,26 +145,28 @@ export default function KidsShow() {
     setError(null);
     if (attempt === 0) setEpisodes([]);
 
+    // With netFetch (session-backed), fetching is near-instant.
+    // Messages rotate quickly to avoid the appearance of hanging.
     const phases = [
       "Connecting to WCO…",
-      "Fetching episode list (HTTP fast-path)…",
-      "Waiting for Cloudflare clearance…",
-      "Running browser fallback fetch…",
+      "Loading episode list…",
+      "Parsing episodes…",
       "Searching WCO catalog…",
+      "Almost done…",
     ];
     let phaseIdx = 0;
     setLoadingMsg(phases[0]);
     const msgTimer = setInterval(() => {
       phaseIdx = Math.min(phaseIdx + 1, phases.length - 1);
       setLoadingMsg(phases[phaseIdx]);
-    }, 4000);
+    }, 2000);
 
     try {
       let raw: { title: string; url: string }[] = [];
 
-      // Phase A: Direct URL fetch
+      // Phase A: Direct URL fetch (usually works instantly with netFetch)
       if (showUrl) {
-        setLoadingMsg("Fetching from show page (HTTP fast-path)…");
+        setLoadingMsg("Loading episode list…");
         raw = await window.wco.getEpisodes(showUrl).catch(() => []);
       }
 
@@ -147,11 +186,11 @@ export default function KidsShow() {
         }
       }
 
-      // Phase C: Retry with backoff (up to 3 total attempts)
-      if (raw.length === 0 && attempt < 2) {
+      // Phase C: Retry with shorter backoff (netFetch is fast, 1 retry is enough)
+      if (raw.length === 0 && attempt < 1) {
         clearInterval(msgTimer);
-        setLoadingMsg(`No episodes yet — retrying in 4s (attempt ${attempt + 2}/3)…`);
-        await new Promise(r => setTimeout(r, 4000));
+        setLoadingMsg(`Retrying…`);
+        await new Promise(r => setTimeout(r, 2000));
         return loadEpisodes(attempt + 1);
       }
 
@@ -167,10 +206,11 @@ export default function KidsShow() {
         return;
       }
 
+      // Map episodes using both title AND url for accurate season/episode detection
       const processed: WCOEpisode[] = raw.map((ep, i) => ({
         ...ep,
-        season: detectSeason(ep.title),
-        epNum: parseEpisodeNumber(ep.title) || i + 1,
+        season: detectSeason(ep.title, ep.url),
+        epNum:  parseEpisodeNumber(ep.title, ep.url) || i + 1,
       }));
 
       const seasonSet = new Set(processed.map(e => e.season));

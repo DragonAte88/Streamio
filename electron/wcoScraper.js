@@ -14,11 +14,12 @@
 
 "use strict";
 
-const { BrowserWindow, app, session } = require("electron");
+const { BrowserWindow, app, session, net } = require("electron");
 const fs   = require("fs");
 const path = require("path");
 const http  = require("http");
 const https = require("https");
+const zlib  = require("zlib");
 const { URL } = require("url");
 
 // ─── Config ────────────────────────────────────────────────────────────────────
@@ -128,11 +129,43 @@ function saveDiskCache() {
 // Initial disk cache load
 loadDiskCache();
 
-// ─── Low-Level HTTP Fetch (Node native, bypasses Electron webRequest) ──────────
+// ─── Electron net.fetch wrapper (uses session cookies → bypasses Cloudflare) ───
 
 /**
- * Raw Node.js HTTP/HTTPS fetch with full header control and timeout.
- * Follows redirects, handles gzip/br, returns { html, finalUrl }.
+ * Fetch using Electron's net module, which carries the scraperWin session cookies.
+ * This bypasses Cloudflare / DDoS-Guard because the session has already been
+ * cleared by the browser window.  Falls back to raw Node HTTP only if net is
+ * unavailable (e.g. before app is ready).
+ */
+async function netFetch(url, opts = {}) {
+  const targetUrl = normalizeUrl(url) || url;
+  const sess = session.fromPartition("persist:wco-scraper");
+  const headers = {
+    "User-Agent":      BASE_HEADERS["User-Agent"],
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer":         BASE_URL + "/",
+    ...(opts.headers || {}),
+  };
+
+  const response = await net.fetch(targetUrl, {
+    session: sess,
+    method: opts.method || "GET",
+    headers,
+    body: opts.body || undefined,
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} for ${targetUrl}`);
+  }
+
+  const html = await response.text();
+  return { html, finalUrl: targetUrl, status: response.status };
+}
+
+/**
+ * Raw Node.js HTTP/HTTPS fetch — kept as fallback for list pages and non-CF endpoints.
+ * WARNING: Gets 403 from Cloudflare-protected WCO pages. Prefer netFetch() for WCO.
  */
 function rawFetch(rawUrl, opts = {}) {
   return new Promise((resolve, reject) => {
@@ -162,7 +195,6 @@ function rawFetch(rawUrl, opts = {}) {
       };
 
       const req = lib.request(reqOpts, (res) => {
-        // Handle redirects
         if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) && res.headers.location) {
           const nextUrl = res.headers.location.startsWith("http") ? res.headers.location : parsed.origin + res.headers.location;
           res.resume();
@@ -180,8 +212,11 @@ function rawFetch(rawUrl, opts = {}) {
         res.on("data", (chunk) => chunks.push(chunk));
         res.on("end", () => {
           try {
-            const buf = Buffer.concat(chunks);
-            // Attempt basic UTF-8 decode (no gzip decompression needed for regex)
+            let buf = Buffer.concat(chunks);
+            const enc = (res.headers["content-encoding"] || "").toLowerCase();
+            if (enc.includes("gzip"))    buf = zlib.gunzipSync(buf);
+            else if (enc.includes("deflate")) buf = zlib.inflateSync(buf);
+            else if (enc.includes("br"))  buf = zlib.brotliDecompressSync(buf);
             const html = buf.toString("utf8");
             resolve({ html, finalUrl: targetUrl, status: res.statusCode });
           } catch (err) {
@@ -314,13 +349,14 @@ async function withNavLock(fn) {
 
 // ─── URL Normalisation ────────────────────────────────────────────────────────
 
-const WCO_HOST_REGEX = /https?:\/\/(www\.)?(watchnixtoons2|wcoforever|wcofun|wco|wcostream)\.(com|tv|net|org|cc)/g;
+const WCO_HOST_REGEX = /https?:\/\/(m\.)?(?:www\.)?(watchnixtoons2|wcoforever|wcofun|wco|wcostream)\.(com|tv|net|org|cc)/g;
 
 function normalizeUrl(href) {
   if (!href) return null;
+  href = href.trim();
   if (href.startsWith("//")) href = "https:" + href;
   if (href.startsWith("/"))  href = BASE_URL + href;
-  // Rewrite any WCO mirror to the active base
+  // Rewrite any WCO mirror (including mobile m.wcostream.tv) to the active base
   href = href.replace(WCO_HOST_REGEX, BASE_URL);
   if (!href.startsWith("http")) return null;
   return href;
@@ -400,108 +436,144 @@ async function pollUntil(win, jsExpr, timeoutMs = 10000) {
   return null;
 }
 
-// ─── Phase 0: Direct HTTP Episode Fetching (WatchNixtoons2 Fast-Path) ─────────
+// ─── Phase 0: Direct Episode Fetching via Electron net.fetch ──────────────────
 
 /**
- * Fetches the show page HTML via raw Node.js HTTP and extracts all episode links
- * using multiple CSS-class patterns and robust regex.
- * Supports: catlist-listview, dark-episode-box, episodeList, episode-list, ul.listing
+ * Fetches the show page HTML via Electron's net.fetch (session-backed, bypasses
+ * Cloudflare) and extracts episode links scoped strictly to the show's own
+ * episode container — ignoring sidebar / recently-added links from other shows.
  */
 async function fetchEpisodesDirect(showUrl) {
+  const fullUrl = normalizeUrl(showUrl) || showUrl;
+  let html;
   try {
-    const fullUrl = normalizeUrl(showUrl) || showUrl;
-    const { html } = await rawFetch(fullUrl);
-
-    // Narrow to the episode container block
-    let scopeHtml = html;
-    const containerKeys = [
-      'id="episodeList"', 'id="episodes"', 'class="dark-episode-box"',
-      'class="eplist"', 'id="catlist-listview"', 'catlist-listview',
-      'class="listing"', 'class="cat-eps"', 'class="episode-list"',
-    ];
-    for (const key of containerKeys) {
-      const idx = html.indexOf(key);
-      if (idx !== -1) {
-        scopeHtml = html.slice(Math.max(0, idx - 200));
-        // Try to terminate at the end of the section
-        const endCandidates = ['<!--/catlist-->', '</section>', '</div>', '</ul>'];
-        for (const end of endCandidates) {
-          const eIdx = scopeHtml.indexOf(end, 400);
-          if (eIdx !== -1 && eIdx < 50000) { scopeHtml = scopeHtml.slice(0, eIdx); break; }
-        }
-        break;
-      }
-    }
-
-    const matches = [];
-    // Multi-pattern anchor extraction — handles nested <span> / <div> inside <a>
-    const tagRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-    let match;
-    while ((match = tagRegex.exec(scopeHtml)) !== null) {
-      const linkHref = match[1].trim();
-      const rawTitle = match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-
-      if (!rawTitle || rawTitle.length < 2) continue;
-      if (linkHref.includes("#") || linkHref.includes("/category/") || linkHref.includes("/anime/") && !linkHref.includes("-episode-") && !linkHref.includes("-season-")) continue;
-
-      const norm = normalizeUrl(linkHref) || (linkHref.startsWith("/") ? BASE_URL + linkHref : linkHref);
-      if (!norm) continue;
-
-      // Accept any link that looks like an episode or season
-      if (isEpisodeUrl(norm) || norm.includes("wcostream") || norm.includes("wco.tv") || norm.includes("wcofun")) {
-        matches.push({ title: rawTitle, url: norm });
-      }
-    }
-
-    // Also scan for direct episode URL patterns anywhere in the HTML (fallback)
-    if (matches.length === 0) {
-      const epUrlRegex = /href=["']([^"']*-episode-[^"']+)["'][^>]*>([^<]{2,80})</gi;
-      let m2;
-      while ((m2 = epUrlRegex.exec(html)) !== null) {
-        const norm = normalizeUrl(m2[1]) || m2[1];
-        const title = m2[2].trim();
-        if (norm && title) matches.push({ title, url: norm });
-      }
-    }
-
-    const seen = new Set();
-    const unique = matches.filter(item => {
-      if (seen.has(item.url)) return false;
-      seen.add(item.url);
-      return true;
-    });
-
-    return unique.length > 0 ? unique : null;
+    const res = await netFetch(fullUrl);
+    html = res.html;
   } catch (err) {
-    console.warn("[wcoScraper] Direct HTTP episode fetch failed:", err.message);
+    console.warn("[wcoScraper] netFetch episode fetch failed:", err.message);
     return null;
   }
+
+  // ── Step 1: Isolate the episode list container ────────────────────────────
+  // WCO pages contain many episode links in sidebars / "recently added" rows.
+  // We must restrict extraction to the show's own episode container to avoid
+  // pulling in episodes from completely different shows.
+  const CONTAINER_MARKERS = [
+    // id-based containers (most reliable)
+    { open: 'id="catlist-listview"',    close: '</ul>' },
+    { open: 'id="episodeList"',          close: '</ul>' },
+    { open: 'id="episode_related"',      close: '</ul>' },
+    { open: 'id="episodes"',             close: '</div>' },
+    // class-based containers
+    { open: 'class="dark-episode-box"',  close: '</div>' },
+    { open: 'class="cat-eps"',           close: '</div>' },
+    { open: 'class="eplist"',            close: '</div>' },
+    { open: 'class="listing season',     close: '</ul>' },
+    { open: 'class="listing"',           close: '</ul>' },
+    { open: 'class="episode-list"',      close: '</div>' },
+  ];
+
+  let scopeHtml = null;
+  for (const marker of CONTAINER_MARKERS) {
+    const startIdx = html.indexOf(marker.open);
+    if (startIdx === -1) continue;
+
+    // Back up to the opening tag
+    const tagStart = html.lastIndexOf('<', startIdx) || startIdx;
+    const chunk = html.slice(tagStart);
+
+    // Find a reasonable end boundary — try the marker's close tag but also
+    // cap at 300 KB to avoid runaway matches on huge pages.
+    const endIdx = chunk.indexOf(marker.close, 100);
+    scopeHtml = endIdx > 0 ? chunk.slice(0, endIdx + marker.close.length) : chunk.slice(0, 300000);
+    console.log(`[wcoScraper] Episode container found via '${marker.open}', scope size: ${scopeHtml.length}`);
+    break;
+  }
+
+  // If no known container found, fall back to extracting only links that look
+  // exactly like episode URLs from the whole page (narrower regex).
+  const searchHtml = scopeHtml || html;
+
+  // ── Step 2: Extract episode links ────────────────────────────────────────
+  // Derive the show slug from the URL so we can filter out sidebar episodes
+  // from completely different shows that may appear even in the episode container.
+  const urlObj = (() => { try { return new URL(fullUrl); } catch { return null; } })();
+  const showSlug = urlObj
+    ? urlObj.pathname.replace(/\/anime\/|\/cartoon\//gi, "").split("/")[0].split("?")[0].toLowerCase().trim()
+    : "";
+  // Build a set of acceptable slug prefixes (handles season variants like
+  // "american-dad-season-1", "american-dad-season-2", etc.)
+  // Strip trailing "-season-N" to get the base show slug.
+  const baseSlug = showSlug.replace(/-season-\d+$/i, "").replace(/-dub$|-sub$|-dubbed$|-subbed$/i, "").trim();
+
+  const matches = [];
+  const seen    = new Set();
+
+  const tagRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = tagRegex.exec(searchHtml)) !== null) {
+    const rawHref  = match[1].trim();
+    const rawTitle = match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+
+    if (!rawTitle || rawTitle.length < 2) continue;
+    // Skip navigation, category, playlist, and list links
+    if (
+      rawHref.includes("#") ||
+      rawHref.includes("/category/") ||
+      rawHref.includes("/playlist-cat/") ||
+      rawHref.includes("/cartoon-list") ||
+      rawHref.includes("/dubbed-anime-list") ||
+      rawHref.includes("/subbed-anime-list")
+    ) continue;
+
+    // Must be an episode or season link
+    if (!isEpisodeUrl(rawHref)) continue;
+
+    const norm = normalizeUrl(rawHref) || (rawHref.startsWith("/") ? BASE_URL + rawHref : rawHref);
+    if (!norm || !norm.startsWith("http")) continue;
+    if (seen.has(norm)) continue;
+
+    // Filter out unrelated sidebar links if baseSlug is available
+    if (baseSlug.length > 3) {
+      const normLower = norm.toLowerCase();
+      if (!normLower.includes(baseSlug)) continue;
+    }
+
+    seen.add(norm);
+    matches.push({ title: rawTitle, url: norm });
+  }
+
+  if (matches.length > 0) {
+    console.log(`[wcoScraper] fetchEpisodesDirect: found ${matches.length} episodes for ${fullUrl}`);
+    return matches;
+  }
+
+  console.warn(`[wcoScraper] fetchEpisodesDirect: 0 episodes extracted for ${fullUrl}`);
+  return null;
 }
 
-// ─── Phase 0b: Season-Aware Episode Fetching (wco.tv /anime/?season=sX-N) ─────
+// ─── Phase 0b: Season-Aware Episode Fetching ──────────────────────────────────
 
 /**
- * WCO.tv exposes a season parameter: /anime/SLUG/?season=s1-0
- * This fetches the show's anime page and discovers all season URLs,
- * then fetches each season's episode list.
+ * WCO sometimes has separate pages per season (?season=s1-0, ?season=s2-0, …).
+ * This fetches the show page, discovers all season sub-pages, and merges episodes.
+ * Uses netFetch so Cloudflare cookies from the browser session are applied.
  */
 async function fetchSeasonAwareEpisodes(showUrl) {
   try {
     const fullUrl = normalizeUrl(showUrl) || showUrl;
 
-    // Step 1: Fetch the anime/cartoon page and extract season tabs
-    const { html: showHtml } = await rawFetch(fullUrl);
+    // Step 1: Fetch the show page and look for season tab URLs
+    const { html: showHtml } = await netFetch(fullUrl);
 
-    // Extract season links from the page: ?season=s1-0, ?season=s2-0, etc.
-    const seasonUrlRegex = /href=["']([^"']*[?&]season=s\d+-\d+[^"']*)["']/gi;
     const seasonUrls = new Set();
+    const seasonUrlRegex = /href=["']([^"']*[?&]season=s\d+-\d+[^"']*)["']/gi;
     let sm;
     while ((sm = seasonUrlRegex.exec(showHtml)) !== null) {
-      const sUrl = normalizeUrl(sm[1]) || (sm[1].startsWith("http") ? sm[1] : BASE_URL + sm[1]);
+      const sUrl = normalizeUrl(sm[1]) || (sm[1].startsWith("http") ? sm[1] : fullUrl.split("?")[0] + sm[1].slice(sm[1].indexOf("?")));
       if (sUrl) seasonUrls.add(sUrl);
     }
 
-    // Also check for WCO-style season dropdowns: data-season="1", data-link="/anime/slug/?season=s1-0"
     const dataSeasonRegex = /data-link=["']([^"']*season=[^"']+)["']/gi;
     let dsm;
     while ((dsm = dataSeasonRegex.exec(showHtml)) !== null) {
@@ -509,31 +581,28 @@ async function fetchSeasonAwareEpisodes(showUrl) {
       if (sUrl) seasonUrls.add(sUrl);
     }
 
-    // If no season links found, try the base show page directly
+    // No season tabs — just parse the base page directly
     if (seasonUrls.size === 0) {
-      const directEps = await fetchEpisodesDirect(fullUrl);
-      return directEps;
+      return await fetchEpisodesDirect(fullUrl);
     }
 
-    console.log(`[wcoScraper] Found ${seasonUrls.size} season URLs for:`, fullUrl);
+    console.log(`[wcoScraper] Found ${seasonUrls.size} season page(s) for: ${fullUrl}`);
 
-    // Step 2: Fetch episodes from each season page
+    // Step 2: Fetch each season page and merge episodes
     const allEpisodes = [];
     for (const seasonUrl of seasonUrls) {
       try {
         const eps = await fetchEpisodesDirect(seasonUrl);
-        if (eps && eps.length > 0) {
-          allEpisodes.push(...eps);
-        }
-        await sleep(200); // polite delay
+        if (eps && eps.length > 0) allEpisodes.push(...eps);
+        await sleep(150);
       } catch {}
     }
 
-    // Also merge episodes from the base show page (some seasons listed there)
-    const baseEps = await fetchEpisodesDirect(fullUrl);
+    // Also include base page episodes (first season is often there too)
+    const baseEps = await fetchEpisodesDirect(fullUrl).catch(() => null);
     if (baseEps) allEpisodes.push(...baseEps);
 
-    // Deduplicate
+    // Deduplicate by URL
     const seen = new Set();
     const unique = allEpisodes.filter(ep => {
       if (seen.has(ep.url)) return false;
@@ -691,10 +760,10 @@ async function search(query, filterType = "all") {
   const existing = diskCacheData.searches[cacheKey];
   if (existing && Date.now() - existing.timestamp < 24 * 3600 * 1000) return existing.data;
 
-  // Phase 0: Direct HTTP search
+  // Phase 0: Search via Electron net.fetch (session has Cloudflare cookies)
   try {
     const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(query)}`;
-    const { html } = await rawFetch(searchUrl, { timeout: 10000 });
+    const { html } = await netFetch(searchUrl);
 
     const results = [];
     const linkRegex = /<a\s+[^>]*href=["']([^"']*(?:\/anime\/|\/cartoon\/)[^"']+)["'][^>]*>([^<]{2,80})</gi;
@@ -714,7 +783,9 @@ async function search(query, filterType = "all") {
       saveDiskCache();
       return applySearchFilter(deduped, filterType);
     }
-  } catch {}
+  } catch (err) {
+    console.warn("[wcoScraper] netFetch search failed:", err.message);
+  }
 
   // Phase 1: Browser-based search
   return withNavLock(async () => {
@@ -787,7 +858,7 @@ function extractStreamFromHTML(html, baseUrl = BASE_URL) {
     // 1. Direct getvid / evid URL in raw HTML
     const getvidMatch =
       html.match(/https?:\/\/[^\s"'<>]*(?:getvid|evid=)[^\s"'<>]+/i) ||
-      html.match(/(?:\/inc\/embed\/|\\/embed\/)[^\s"'<>]+/i);
+      html.match(/(?:\/inc\/embed\/|\\\/embed\/)[^\s"'<>]+/i);
     if (getvidMatch) {
       const mu = getvidMatch[0].replace(/\\/g, "");
       return normalizeUrl(mu) || (mu.startsWith("/") ? baseUrl + mu : mu);
@@ -869,45 +940,62 @@ function extractStreamFromHTML(html, baseUrl = BASE_URL) {
   return null;
 }
 
-// ─── Phase 1: WatchNixtoons2 AJAX /inc/embed/getvidlink Resolver ─────────────
+// ─── Phase 1: WCO AJAX /inc/embed/getvidlink Resolver (via netFetch) ──────────
 
 /**
- * Directly hits WCO's embed AJAX endpoint to get the getvid token.
- * This is the fastest reliable method when it works — pure HTTP, no browser.
+ * Fetches the embed page via Electron's net.fetch (session-backed → Cloudflare OK)
+ * and calls the getvidlink AJAX endpoint to obtain the direct getvid stream URL.
+ * NOTE: embed.wcostream.com is treated as a cross-origin resource and may still
+ * be blocked by ERR_BLOCKED_BY_CLIENT inside Electron's net module. If this fails
+ * the caller falls through to the browser-window interception (Phase 2+).
  */
 async function resolveGetVidAJAX(embedUrl) {
   try {
     const fullEmbedUrl = normalizeUrl(embedUrl) || embedUrl;
-    const { html: embedHtml } = await rawFetch(fullEmbedUrl, {
-      headers: { ...BASE_HEADERS, "Referer": BASE_URL + "/" },
-      timeout: 12000,
-    });
+    const embedSess = session.fromPartition("persist:wco-extractor");
 
-    // Method A: extract getvidlink AJAX path from embed page
+    // Fetch embed page using net.fetch with the extractor session
+    const embedResponse = await net.fetch(fullEmbedUrl, {
+      session: embedSess,
+      headers: {
+        "User-Agent":  BASE_HEADERS["User-Agent"],
+        "Accept":      "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Referer":     BASE_URL + "/",
+        "Origin":      BASE_URL,
+      },
+    });
+    if (!embedResponse.ok) throw new Error(`HTTP ${embedResponse.status}`);
+    const embedHtml = await embedResponse.text();
+
+    // Method A: call getvidlink AJAX endpoint
     const apiPathMatch = embedHtml.match(/"(\/inc\/embed\/getvidlink[^"]+)"/i) ||
                          embedHtml.match(/'(\/inc\/embed\/getvidlink[^']+)'/i);
     if (apiPathMatch) {
-      const apiUrl = BASE_URL + apiPathMatch[1];
-      const { html: apiRaw } = await rawFetch(apiUrl, {
+      const embedOrigin = new URL(fullEmbedUrl).origin;
+      const apiUrl = embedOrigin + apiPathMatch[1];
+      const apiResponse = await net.fetch(apiUrl, {
+        session: embedSess,
         headers: {
-          ...AJAX_HEADERS,
-          "Referer": fullEmbedUrl,
-          "Origin": BASE_URL,
+          "User-Agent":       BASE_HEADERS["User-Agent"],
+          "X-Requested-With": "XMLHttpRequest",
+          "Accept":           "*/*",
+          "Referer":          fullEmbedUrl,
+          "Origin":           embedOrigin,
         },
-        timeout: 10000,
       });
+      if (!apiResponse.ok) throw new Error(`API HTTP ${apiResponse.status}`);
+      const apiRaw = await apiResponse.text();
 
       let data;
       try { data = JSON.parse(apiRaw); } catch { return null; }
 
       const token = data.fhd || data.hd || data.sd || data.enc;
       if (!token) return null;
-
       if (data.server) return `${data.server}/getvid?evid=${token}`;
       if (data.cdn)    return `${data.cdn}/getvid?evid=${token}`;
     }
 
-    // Method B: embedded stream URL directly in the embed page
+    // Method B: stream URL embedded directly in the embed page HTML
     const directStream = extractStreamFromHTML(embedHtml, BASE_URL);
     if (directStream) return directStream;
 
@@ -919,24 +1007,21 @@ async function resolveGetVidAJAX(embedUrl) {
 }
 
 /**
- * Gets the embed iframe URL from the episode page, then resolves it via AJAX.
+ * Fast-path: fetch the episode page via netFetch (no browser needed) and see
+ * if the embed/stream URL is available in the raw HTML.
  */
 async function resolveEpisodeStream(episodeUrl) {
   try {
     const fullUrl = normalizeUrl(episodeUrl) || episodeUrl;
-    const { html } = await rawFetch(fullUrl, {
-      headers: { ...BASE_HEADERS, "Referer": BASE_URL + "/" },
-      timeout: 12000,
-    });
+    const { html } = await netFetch(fullUrl);
 
-    // First pass: direct stream link in the episode page HTML
+    // Check for a direct stream or embed URL in the page source
     const directStream = extractStreamFromHTML(html, BASE_URL);
     if (directStream && directStream.startsWith("http")) {
-      // If it's a getvid or m3u8 URL — return directly
       if (directStream.includes("getvid") || directStream.includes(".m3u8") || directStream.includes(".mp4")) {
         return directStream;
       }
-      // It's an iframe/embed URL — resolve it
+      // Embed URL — attempt to resolve it via AJAX
       return await resolveGetVidAJAX(directStream);
     }
 
@@ -1187,10 +1272,10 @@ async function getList(type) {
   const pathStr = LIST_PATHS[type];
   if (!pathStr) throw new Error("Invalid list type: " + type);
 
-  // Phase 0: Direct HTTP fetch
+  // Phase 0: Fetch via session (Cloudflare-safe)
   try {
     const listUrl = BASE_URL + pathStr;
-    const { html } = await rawFetch(listUrl, { timeout: 15000 });
+    const { html } = await netFetch(listUrl).catch(() => rawFetch(listUrl, { timeout: 15000 }));
 
     const results = [];
     const linkRegex = /<a\s+[^>]*href=["']([^"']*(?:\/anime\/|\/cartoon\/)[^"']+)["'][^>]*>([^<]{2,80})</gi;
