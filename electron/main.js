@@ -7,6 +7,7 @@ const discordOAuth = require("./discordOAuth");
 const autoUpdaterModule = require("./autoUpdater");
 const systemStats = require("./systemStats");
 const wcoScraper = require("./wcoScraper");
+const wcoDownloader = require("./wcoDownloader");
 
 app.disableHardwareAcceleration();
 
@@ -248,6 +249,7 @@ app.whenReady().then(() => {
   ipcMain.handle("wco:extract", (_e, url) => wcoScraper.extractVideo(url));
   ipcMain.handle("wco:list", (_e, type) => wcoScraper.getList(type));
   ipcMain.handle("wco:refresh", () => { wcoScraper.refresh(); return { ok: true, ts: Date.now() }; });
+  wcoDownloader.registerIpcHandlers();
 
   ipcMain.handle("discord:watching", (_e, channelName) => {
     discordRpc.setWatching(channelName);

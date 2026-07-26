@@ -88,5 +88,13 @@ contextBridge.exposeInMainWorld("wco", {
   getEpisodes: (url) => ipcRenderer.invoke("wco:episodes", url),
   extractVideo: (url) => ipcRenderer.invoke("wco:extract", url),
   getList: (type) => ipcRenderer.invoke("wco:list", type),
-  refresh: () => ipcRenderer.invoke("wco:refresh")
+  refresh: () => ipcRenderer.invoke("wco:refresh"),
+  // Downloader
+  startSeasonDownload: (params) => ipcRenderer.invoke("wco:start-season-download", params),
+  getDownloadStatus: () => ipcRenderer.invoke("wco:get-download-status"),
+  onDownloadProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on("wco:download-progress", listener);
+    return () => ipcRenderer.removeListener("wco:download-progress", listener);
+  },
 });

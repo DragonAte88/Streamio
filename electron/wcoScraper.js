@@ -379,7 +379,7 @@ async function getEpisodes(showUrl) {
           'a[href*="-episode-"]', 'a[href*="/episode/"]',
         ];
 
-        for (const sel of SELECTORS) {
+        for (const sel of EPISODE_SELECTORS) {
           const els = Array.from(document.querySelectorAll(sel));
           if (els.length === 0) continue;
 
@@ -451,11 +451,13 @@ async function extractVideo(episodeUrl) {
 
       if (AD_DOMAINS.some(d => u.includes(d))) { callback({}); return; }
 
-      const isM3u8 = u.includes(".m3u8");
-      const isMp4  = u.includes(".mp4") && !u.includes("thumbnail") && !u.includes("preview");
+      // Enhanced WCO direct stream matching: includes getvid?evid=, .m3u8, .mp4, /hls/
+      const isGetVid = u.includes("getvid") || u.includes("evid=");
+      const isM3u8   = u.includes(".m3u8");
+      const isMp4    = u.includes(".mp4") && !u.includes("thumbnail") && !u.includes("preview");
       const isHlsPath = /\/hls\/|playlist\.m3u8|index\.m3u8|\/stream\/|\/video\//i.test(u);
 
-      if (isM3u8 || isMp4 || isHlsPath) {
+      if (isGetVid || isM3u8 || isMp4 || isHlsPath) {
         if (u.includes("1x1") || u.includes("pixel") || u.includes("beacon")) {
           callback({}); return;
         }
@@ -463,7 +465,7 @@ async function extractVideo(episodeUrl) {
         resolved = true;
         clearTimeout(timeout);
         cleanup();
-        console.log("[wcoExtractor] Stream intercepted:", u.slice(0, 120));
+        console.log("[wcoExtractor] Deep-dive stream intercepted:", u.slice(0, 150));
 
         try { extractorWin.webContents.stop(); } catch {}
         resolve(u);
@@ -506,6 +508,59 @@ async function extractVideo(episodeUrl) {
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         httpReferrer: BASE_URL + "/",
       });
+
+      // Active DOM Deep-Dive & Auto-Dismiss Ad Overlay
+      const pollDeadline = Date.now() + 15000;
+      while (Date.now() < pollDeadline && !resolved) {
+        await sleep(600);
+        if (!extractorWin || extractorWin.isDestroyed()) break;
+
+        // Auto-click "Close" ad overlay button
+        await extractorWin.webContents.executeJavaScript(`
+          (function() {
+            try {
+              const closeBtns = Array.from(document.querySelectorAll('button, div, a, input, span')).filter(el => {
+                const txt = (el.textContent || el.value || '').trim().toLowerCase();
+                return txt.includes('close') || txt === 'x' || el.className?.includes('close');
+              });
+              closeBtns.forEach(btn => btn.click());
+            } catch (e) {}
+          })()
+        `).catch(() => {});
+
+        // DOM deep-dive for video src / iframe src / getvid link
+        const domSrc = await extractorWin.webContents.executeJavaScript(`
+          (function() {
+            try {
+              const v = document.querySelector('video');
+              if (v && v.src && v.src.startsWith('http')) return v.src;
+
+              const source = document.querySelector('video source');
+              if (source && source.src && source.src.startsWith('http')) return source.src;
+
+              const iframe = document.querySelector('iframe[src*="getvid"], iframe[src*="embed"]');
+              if (iframe && iframe.src) return iframe.src;
+
+              const allLinks = Array.from(document.querySelectorAll('a[href], iframe[src]'));
+              for (const l of allLinks) {
+                const href = l.href || l.src || '';
+                if (href.includes('getvid') || href.includes('evid=')) return href;
+              }
+            } catch (e) {}
+            return null;
+          })()
+        `).catch(() => null);
+
+        if (domSrc && !resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          cleanup();
+          console.log("[wcoExtractor] DOM deep-dive found stream:", domSrc.slice(0, 150));
+          try { extractorWin.webContents.stop(); } catch {}
+          resolve(domSrc);
+          return;
+        }
+      }
     } catch (err) {
       if (!err.message?.includes("ERR_ABORTED") && !err.message?.includes("ERR_BLOCKED_BY_RESPONSE")) {
         console.error("[wcoExtractor] loadURL error:", err.message);

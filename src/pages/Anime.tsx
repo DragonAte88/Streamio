@@ -29,21 +29,47 @@ interface SystemStatus {
 
 const FLEX_SYSTEMS: { label: string; url: string }[] = [
   { label: "Flex-1 (Production API)", url: `${API_BASE}/health` },
-  { label: "Flex-3 (Staging API)",    url: "https://167-234-210-42.sslip.io/health" },
+  // 138.2.232.225 is the real Flex-3. The previous value (167-234-210-42) was
+  // inherited from the old KodiRoblox bot's config and belongs to no instance
+  // in this project, so this row could only ever report "unreachable".
+  { label: "Flex-3 (Staging API)",    url: "https://138-2-232-225.sslip.io/health" },
   { label: "Flex-2 (Bot Server)",     url: "https://170-9-15-10.sslip.io/health" },
 ];
 
+/**
+ * Health probe with retry.
+ *
+ * A single 6s attempt was reporting healthy servers as "unreachable": these
+ * checks run while the WCO scraper window and the artwork queue are saturating
+ * Chromium's socket pool, so a probe can sit queued for longer than its own
+ * timeout without the server ever being slow. Retrying once with a longer
+ * ceiling distinguishes "actually down" from "we were too busy to ask".
+ */
 async function pingSystem(url: string): Promise<{ ok: boolean; latency: number; detail: string }> {
   const start = Date.now();
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
-    const latency = Date.now() - start;
-    let detail = "";
-    try { const j = await res.json(); detail = j.status || j.message || ""; } catch {}
-    return { ok: res.ok, latency, detail: detail || (res.ok ? "online" : `HTTP ${res.status}`) };
-  } catch (e: any) {
-    return { ok: false, latency: Date.now() - start, detail: e?.message?.includes("timeout") ? "timed out" : "unreachable" };
+  let lastDetail = "unreachable";
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(attempt === 0 ? 8000 : 15000),
+        cache: "no-store"
+      });
+      const latency = Date.now() - start;
+      let detail = "";
+      try {
+        const j = await res.json();
+        detail = j.status || j.message || "";
+      } catch {}
+      // A real HTTP status is a definitive answer - don't retry it.
+      return { ok: res.ok, latency, detail: detail || (res.ok ? "online" : `HTTP ${res.status}`) };
+    } catch (e: any) {
+      lastDetail = e?.name === "TimeoutError" || e?.message?.includes("timeout") ? "timed out" : "unreachable";
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 750));
+    }
   }
+
+  return { ok: false, latency: Date.now() - start, detail: lastDetail };
 }
 
 // ─── Styles ────────────────────────────────────────────────────────────────────

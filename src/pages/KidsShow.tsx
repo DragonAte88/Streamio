@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { usePlayback } from "../lib/PlaybackContext";
-import { fetchArtwork } from "../lib/api";
+import { artworkManager } from "../lib/artworkQueue";
 import ContextMenu, { ContextMenuOption } from "../components/ContextMenu";
+import DownloadModal from "../components/DownloadModal";
 
 type WCOEpisode = { title: string; url: string; season: string; epNum: number };
 
@@ -62,19 +63,25 @@ export default function KidsShow() {
   const [activeEpUrl, setActiveEpUrl] = useState<string | null>(null);
   const [extracting, setExtracting]   = useState(false);
 
+  // Downloader
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+
   // Context menu / hover
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; options: ContextMenuOption[] } | null>(null);
   const [hoveredUrl, setHoveredUrl]   = useState<string | null>(null);
 
-  // ── Fetch artwork ──
+  // ── Fetch artwork via persistent manager ──
   useEffect(() => {
     if (!showTitle) return;
-    fetchArtwork(showTitle, isMovie ? "movie" : "tv").then((art) => {
-      if (art?.poster)     setPoster(art.poster);
-      if (art?.background) setBackdrop(art.background);
-      if (art?.overview)   setOverview(art.overview);
-      setArtLoaded(true);
-    }).catch(() => setArtLoaded(true));
+    artworkManager
+      .getArtwork(showTitle, isMovie ? "movie" : "tv")
+      .then((art) => {
+        if (art?.poster)     setPoster(art.poster);
+        if (art?.background) setBackdrop(art.background);
+        if (art?.overview)   setOverview(art.overview);
+        setArtLoaded(true);
+      })
+      .catch(() => setArtLoaded(true));
   }, [showTitle, isMovie]);
 
   // ── If it's a movie, extract stream and play immediately ──
@@ -156,7 +163,7 @@ export default function KidsShow() {
 
   useEffect(() => { loadEpisodes(); }, [showUrl, showTitle]);
 
-  // ── Play episode ──
+  // ── Play episode — each queue entry carries wcoUrl for lazy per-episode extraction ──
   const handlePlay = async (startIndex: number, list: WCOEpisode[]) => {
     const ep = list[startIndex];
     if (!ep) return;
@@ -164,33 +171,61 @@ export default function KidsShow() {
     setActiveEpUrl(ep.url);
     setExtracting(true);
 
-    const streamUrl = await window.wco.extractVideo(ep.url).catch(() => null);
+    // Deep-dive extract the direct getvid/m3u8/mp4 stream URL
+    let streamUrl = await window.wco.extractVideo(ep.url).catch(() => null);
+
+    // Retry once on failure — WCO ads can delay the stream
+    if (!streamUrl) {
+      await new Promise(r => setTimeout(r, 3000));
+      streamUrl = await window.wco.extractVideo(ep.url).catch(() => null);
+    }
+
     setExtracting(false);
 
     if (!streamUrl) {
-      alert(`Could not extract stream for:\n${ep.title}\n\nTry the Refresh button on the Anime page.`);
+      alert(`Could not extract stream for:\n${ep.title}\n\nWCO may be blocking requests. Try the Refresh button or wait a moment and retry.`);
       setActiveEpUrl(null);
       return;
     }
 
+    // Queue: each entry stores wcoUrl so PlaybackContext can lazily extract stream per episode
     const queue = list.slice(startIndex + 1).map(e => ({
-      id: e.url, name: `${showTitle} — ${e.title}`,
-      url: streamUrl, wcoUrl: e.url, group: "VOD",
+      id: e.url,
+      name: `${showTitle} — ${e.title}`,
+      url: e.url,       // will be resolved via wcoUrl at play time
+      wcoUrl: e.url,    // the WCO episode page URL used for extraction
+      group: "VOD",
     }));
 
     play({
-      id: ep.url, name: `${showTitle} — ${ep.title}`,
-      url: streamUrl, wcoUrl: ep.url, group: "VOD",
+      id: ep.url,
+      name: `${showTitle} — ${ep.title}`,
+      url: streamUrl,   // direct getvid/mp4/m3u8 stream — already extracted
+      wcoUrl: ep.url,
+      group: "VOD",
     }, queue);
   };
 
   // ── Context menu ──
   const openContextMenu = (e: React.MouseEvent, idx: number, list: WCOEpisode[]) => {
     e.preventDefault();
+    const ep = list[idx];
     setContextMenu({
       x: e.clientX, y: e.clientY,
       options: [
         { label: "▶ Play from here", onClick: () => handlePlay(idx, list) },
+        {
+          label: "⬇ Download this episode",
+          onClick: () => {
+            if ((window as any).wco?.startSeasonDownload) {
+              (window as any).wco.startSeasonDownload({
+                showTitle: `${showTitle} — ${ep.title}`,
+                episodes: [ep],
+                extractAfterZip: false,
+              });
+            }
+          },
+        },
         {
           label: "★ Add to My List",
           onClick: () => {
@@ -249,7 +284,7 @@ export default function KidsShow() {
                   {overview}
                 </p>
               )}
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                 {episodes.length > 0 && (
                   <Chip color="rgba(99,102,241,0.15)" borderColor="rgba(99,102,241,0.3)" textColor="var(--accent)">
                     {episodes.length} Episode{episodes.length !== 1 ? "s" : ""}
@@ -264,6 +299,18 @@ export default function KidsShow() {
                   <Chip color="rgba(16,185,129,0.12)" borderColor="rgba(16,185,129,0.3)" textColor="#10b981">
                     Movie
                   </Chip>
+                )}
+                {!isMovie && episodes.length > 0 && (
+                  <button
+                    onClick={() => setShowDownloadModal(true)}
+                    style={{
+                      padding: "4px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700,
+                      background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.35)",
+                      color: "#10b981", cursor: "pointer", letterSpacing: 0.5,
+                    }}
+                  >
+                    ⬇ Download Season
+                  </button>
                 )}
               </div>
             </div>
@@ -477,6 +524,16 @@ export default function KidsShow() {
           x={contextMenu.x} y={contextMenu.y}
           options={contextMenu.options}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Download modal */}
+      {showDownloadModal && (
+        <DownloadModal
+          showTitle={showTitle}
+          seasons={seasons}
+          episodes={episodes}
+          onClose={() => setShowDownloadModal(false)}
         />
       )}
     </div>
