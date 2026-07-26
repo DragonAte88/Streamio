@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
-const { MpvController } = require("./mpvController");
+const fs   = require("fs");
+const { MpvController, MPV_PATH, MPV_LOG_PATH } = require("./mpvController");
 const discordRpc = require("./discordRpc");
 const discordOAuth = require("./discordOAuth");
 const autoUpdaterModule = require("./autoUpdater");
@@ -311,10 +312,18 @@ app.whenReady().then(() => {
     return true;
   });
 
-  ipcMain.handle("player:play", async () => mpv && mpv.play());
-  ipcMain.handle("player:pause", async () => mpv && mpv.pause());
-  ipcMain.handle("player:seek", async (_e, seconds, mode) => mpv && mpv.seek(seconds, mode));
+  ipcMain.handle("player:play",   async () => mpv && mpv.play());
+  ipcMain.handle("player:pause",  async () => mpv && mpv.pause());
+  ipcMain.handle("player:seek",   async (_e, seconds, mode) => mpv && mpv.seek(seconds, mode));
   ipcMain.handle("player:volume", async (_e, vol) => mpv && mpv.setVolume(vol));
+
+  // Read back the last MPV verbose log for diagnostics
+  ipcMain.handle("player:mpvlog", () => {
+    try { return fs.readFileSync(MPV_LOG_PATH, "utf8").slice(-8000); } catch { return null; }
+  });
+  // Expose the configured MPV binary path so the renderer can show it in errors
+  ipcMain.handle("player:mpvpath", () => MPV_PATH);
+
   ipcMain.handle("player:stop", async () => {
     if (mpv) {
       mpv.stop();

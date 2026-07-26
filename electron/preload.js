@@ -1,14 +1,16 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("player", {
-  start: (meta) => ipcRenderer.invoke("player:start", meta),
-  load: (url) => ipcRenderer.invoke("player:load", url),
-  play: () => ipcRenderer.invoke("player:play"),
-  pause: () => ipcRenderer.invoke("player:pause"),
-  seek: (seconds, mode) => ipcRenderer.invoke("player:seek", seconds, mode),
-  setVolume: (vol) => ipcRenderer.invoke("player:volume", vol),
-  stop: () => ipcRenderer.invoke("player:stop"),
-  setBounds: (bounds) => ipcRenderer.send("player:bounds", bounds),
+  start:      (meta) => ipcRenderer.invoke("player:start", meta),
+  load:       (url)  => ipcRenderer.invoke("player:load", url),
+  play:       ()     => ipcRenderer.invoke("player:play"),
+  pause:      ()     => ipcRenderer.invoke("player:pause"),
+  seek:       (seconds, mode) => ipcRenderer.invoke("player:seek", seconds, mode),
+  setVolume:  (vol)  => ipcRenderer.invoke("player:volume", vol),
+  stop:       ()     => ipcRenderer.invoke("player:stop"),
+  setBounds:  (bounds) => ipcRenderer.send("player:bounds", bounds),
+  getMpvLog:  ()     => ipcRenderer.invoke("player:mpvlog"),
+  getMpvPath: ()     => ipcRenderer.invoke("player:mpvpath"),
   onPropertyChange: (cb) => {
     const listener = (_e, msg) => cb(msg);
     ipcRenderer.on("player:property-change", listener);
@@ -30,6 +32,7 @@ contextBridge.exposeInMainWorld("player", {
     return () => ipcRenderer.removeListener("player:back", listener);
   }
 });
+
 
 contextBridge.exposeInMainWorld("playerControlsBridge", {
   requestBack: () => ipcRenderer.send("player:back-requested"),

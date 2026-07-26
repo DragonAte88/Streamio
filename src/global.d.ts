@@ -11,6 +11,8 @@ declare global {
       setVolume: (vol: number) => Promise<void>;
       stop: () => Promise<boolean>;
       setBounds: (bounds: { x: number; y: number; width: number; height: number; visible: boolean }) => void;
+      getMpvLog: () => Promise<string | null>;
+      getMpvPath: () => Promise<string>;
       onPropertyChange: (cb: (msg: any) => void) => () => void;
       onExit: (cb: (msg: any) => void) => () => void;
       onEndFile: (cb: (msg: any) => void) => () => void;

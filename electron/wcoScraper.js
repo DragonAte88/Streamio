@@ -3,52 +3,78 @@ const { BrowserWindow, session } = require("electron");
 // ─── Config ────────────────────────────────────────────────────────────────────
 
 const BASE_URL   = "https://www.wcostream.tv";
-const SEARCH_URL = `${BASE_URL}/?s=`; // GET-based search - more reliable than POST
+const SEARCH_URL = `${BASE_URL}/?s=`;
 
-// Longer waits - WCO is behind Cloudflare and loads slowly
-const NAV_SETTLE_MS   = 5000;  // Wait after navigation before polling
-const POLL_INTERVAL   = 600;   // Between DOM polls
-const EPISODE_TIMEOUT = 20000; // Max time to find episodes
-const SEARCH_TIMEOUT  = 15000; // Max time to find search results
-const VIDEO_TIMEOUT   = 25000; // Max time to intercept stream URL
+const NAV_SETTLE_MS   = 5000;
+const POLL_INTERVAL   = 600;
+const EPISODE_TIMEOUT = 20000;
+const SEARCH_TIMEOUT  = 15000;
+const VIDEO_TIMEOUT   = 45000; // 45s — WCO embeds take a long time to resolve
 
 // ─── Window management ─────────────────────────────────────────────────────────
 
-let scraperWin = null;
-let navigating = false;
+let scraperWin   = null;  // Used for list fetching, search, episode scraping
+let extractorWin = null;  // Dedicated window for stream URL interception
+let navigating   = false;
 
 function init() {
   if (scraperWin && !scraperWin.isDestroyed()) return;
 
   scraperWin = new BrowserWindow({
-    show: false,
-    width: 1280,
-    height: 800,
+    show: false, width: 1280, height: 800,
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      webSecurity: true,
-      // Use a persistent session so Cloudflare cookies persist between calls
+      nodeIntegration: false, contextIsolation: true, webSecurity: true,
       partition: "persist:wco-scraper",
     },
   });
-
   scraperWin.on("closed", () => { scraperWin = null; });
-
-  // Warm-up: load the base page to acquire Cloudflare clearance cookie
   console.log("[wcoScraper] Warming up scraper window…");
   scraperWin.loadURL(BASE_URL).catch(() => {});
+
+  // Dedicated extractor window (separate session = separate CF cookies)
+  if (!extractorWin || extractorWin.isDestroyed()) {
+    extractorWin = new BrowserWindow({
+      show: false, width: 1280, height: 800,
+      webPreferences: {
+        nodeIntegration: false, contextIsolation: true, webSecurity: false, // allow cross-origin iframes
+        partition: "persist:wco-extractor",
+      },
+    });
+    extractorWin.on("closed", () => { extractorWin = null; });
+    // Warm up so Cloudflare clearance cookie is acquired early
+    console.log("[wcoScraper] Warming up extractor window…");
+    extractorWin.loadURL(BASE_URL).catch(() => {});
+  }
 }
+
+function destroyExtractor() {
+  if (!extractorWin) return;
+  try { if (!extractorWin.isDestroyed()) extractorWin.destroy(); } catch {}
+  extractorWin = null;
+}
+
 
 function destroy() {
   if (!scraperWin) return;
   try { if (!scraperWin.isDestroyed()) scraperWin.destroy(); } catch {}
   scraperWin = null;
+  destroyExtractor();
 }
 
 function ensureWindow() {
   if (!scraperWin || scraperWin.isDestroyed()) init();
+  if (!extractorWin || extractorWin.isDestroyed()) {
+    extractorWin = new BrowserWindow({
+      show: false, width: 1280, height: 800,
+      webPreferences: {
+        nodeIntegration: false, contextIsolation: true, webSecurity: false,
+        partition: "persist:wco-extractor",
+      },
+    });
+    extractorWin.on("closed", () => { extractorWin = null; });
+  }
 }
+
 
 // ─── Navigation helper ─────────────────────────────────────────────────────────
 
@@ -309,64 +335,138 @@ async function getEpisodes(showUrl) {
 // ─── Video extraction ──────────────────────────────────────────────────────────
 
 /**
- * Extract the stream URL from an episode page.
- * Intercepts the first HLS (.m3u8) or MP4 network request.
+ * Extract the direct stream URL from a WCO episode page.
+ *
+ * Strategy:
+ *  1. Use a DEDICATED extractorWin (separate from scraperWin) so episode
+ *     listing and stream extraction never race each other.
+ *  2. Set up onBeforeRequest on the extractor session BEFORE navigating.
+ *  3. WCO embeds its player in an <iframe> pointing to a third-party host
+ *     (gogoanime, filemoon, vidhide, streamtape, mp4upload, etc.).
+ *     The session-level webRequest interceptor captures ALL requests from
+ *     the window AND its iframes, so we catch the HLS manifest or MP4
+ *     regardless of where it is hosted.
+ *  4. Broaden the URL patterns — WCO CDN URLs often look like:
+ *       https://cdn*.com/hls/HASH/index.m3u8
+ *       https://storage*.com/VIDEO_ID.mp4?token=...
+ *       wss://...  (not useful, skip)
+ *  5. Ignore known ad/tracker domains.
+ *  6. 45-second timeout (WCO embeds are slow to load).
  */
 async function extractVideo(episodeUrl) {
   return new Promise(async (resolve) => {
     ensureWindow();
 
     const url = normalizeUrl(episodeUrl) || episodeUrl;
-    console.log("[wcoScraper] Extracting video from:", url);
+    console.log("[wcoExtractor] Extracting stream from:", url);
 
     let resolved = false;
 
+    const TIMEOUT_MS = VIDEO_TIMEOUT;
     const timeout = setTimeout(() => {
       if (!resolved) {
         resolved = true;
         cleanup();
-        console.warn("[wcoScraper] extractVideo timed out for:", url);
+        console.warn("[wcoExtractor] Timed out (", TIMEOUT_MS / 1000, "s) for:", url);
         resolve(null);
       }
-    }, VIDEO_TIMEOUT);
+    }, TIMEOUT_MS);
 
-    const AD_DOMAINS = ["doubleclick", "googlesyndication", "adnxs", "google-analytics",
-                        "googletagmanager", "facebook.com", "amazon-adsystem"];
+    // Ad/tracker blocklist
+    const AD_DOMAINS = [
+      "doubleclick", "googlesyndication", "adnxs", "google-analytics",
+      "googletagmanager", "facebook.com", "amazon-adsystem", "googleads",
+      "scorecardresearch", "quantserve", "hotjar", "intercom",
+    ];
 
-    const reqFilter = { urls: ["*://*/*.m3u8*", "*://*/*.mp4*", "*://*/hls/*", "*://*/stream/*"] };
+    // Intercept ANY network request that looks like a media stream.
+    // We use wildcard "*://*/*" and filter in JS — Electron's URL filter
+    // patterns don't support the full range of CDN paths WCO uses.
+    const reqFilter = { urls: ["*://*/*"] };
 
-    const handler = (details) => {
+    const handler = (details, callback) => {
+      if (resolved) { callback({}); return; }
+
       const u = details.url;
-      if (resolved) return;
-      if (AD_DOMAINS.some(d => u.includes(d))) return;
-      // Must look like a real stream, not a tiny image/ad segment
-      if (u.includes(".m3u8") || (u.includes(".mp4") && !u.includes("thumbnail"))) {
+
+      // Skip ads/trackers
+      if (AD_DOMAINS.some(d => u.includes(d))) { callback({}); return; }
+
+      // Detect HLS manifest or MP4 stream
+      const isM3u8 = u.includes(".m3u8");
+      const isMp4  = u.includes(".mp4") && !u.includes("thumbnail") && !u.includes("preview");
+      const isHlsPath = /\/hls\/|playlist\.m3u8|index\.m3u8|\/stream\/|\/video\//i.test(u);
+
+      if (isM3u8 || isMp4 || isHlsPath) {
+        // Skip tiny files that are likely ad tracking pixels
+        if (u.includes("1x1") || u.includes("pixel") || u.includes("beacon")) {
+          callback({}); return;
+        }
+
         resolved = true;
         clearTimeout(timeout);
         cleanup();
-        try { scraperWin.webContents.stop(); } catch {}
-        console.log("[wcoScraper] Stream URL intercepted:", u.slice(0, 80));
+
+        console.log("[wcoExtractor] Stream intercepted:", u.slice(0, 120));
+
+        // Stop loading further resources once we have the URL
+        try { extractorWin.webContents.stop(); } catch {}
+
         resolve(u);
+        callback({ cancel: false });
+        return;
       }
+
+      callback({});
     };
 
     function cleanup() {
       try {
-        scraperWin.webContents.session.webRequest.onBeforeRequest(reqFilter, null);
+        if (extractorWin && !extractorWin.isDestroyed()) {
+          extractorWin.webContents.session.webRequest.onBeforeRequest(reqFilter, null);
+        }
       } catch {}
     }
 
-    scraperWin.webContents.session.webRequest.onBeforeRequest(reqFilter, handler);
+    // Install interceptor BEFORE navigating
+    try {
+      extractorWin.webContents.session.webRequest.onBeforeRequest(reqFilter, handler);
+    } catch (err) {
+      console.error("[wcoExtractor] Failed to install interceptor:", err.message);
+      clearTimeout(timeout);
+      resolve(null);
+      return;
+    }
+
+    // Set headers the WCO player expects
+    try {
+      extractorWin.webContents.session.webRequest.onBeforeSendHeaders(
+        { urls: ["*://*/*"] },
+        (details, callback) => {
+          const headers = { ...details.requestHeaders };
+          headers["Referer"]    = BASE_URL + "/";
+          headers["Origin"]     = BASE_URL;
+          headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+          callback({ requestHeaders: headers });
+        }
+      );
+    } catch {}
 
     try {
-      await scraperWin.loadURL(url);
+      await extractorWin.loadURL(url, {
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        httpReferrer: BASE_URL + "/",
+      });
     } catch (err) {
-      if (!err.message?.includes("ERR_ABORTED")) {
-        console.error("[wcoScraper] extractVideo loadURL error:", err.message);
+      if (!err.message?.includes("ERR_ABORTED") && !err.message?.includes("ERR_BLOCKED_BY_RESPONSE")) {
+        console.error("[wcoExtractor] loadURL error:", err.message);
       }
+      // Don't resolve yet — the interceptor may still fire even after ERR_ABORTED
+      // (this is normal for pages that redirect or cancel the main frame)
     }
   });
 }
+
 
 // ─── List pages ────────────────────────────────────────────────────────────────
 
