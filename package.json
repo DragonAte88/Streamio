@@ -56,7 +56,8 @@
     "publish": {
       "provider": "github",
       "owner": "DragonAte88",
-      "repo": "Streamio"
+      "repo": "Streamio",
+      "releaseType": "release"
     }
   },
   "allowScripts": {
