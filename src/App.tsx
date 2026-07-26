@@ -11,7 +11,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Setup from "./pages/Setup";
 import Home from "./pages/Home";
-import LiveTV from "./pages/LiveTV";
+import LiveTVGuide from "./pages/LiveTVGuide";
 import Anime from "./pages/Anime";
 import Search from "./pages/Search";
 import Library from "./pages/Library";
@@ -68,7 +68,7 @@ export default function App() {
                   <Route path="/" element={<Navigate to="/home" replace />} />
                   <Route path="/home" element={<Home />} />
                   <Route path="/anime" element={<Anime />} />
-                  <Route path="/live-tv" element={<LiveTV />} />
+                  <Route path="/live-tv" element={<LiveTVGuide />} />
                   <Route path="/search" element={<Search />} />
                   {/* Dynamic M3U Categories */}
                   <Route path="/movies" element={<DynamicCategoryList title="Movies" urls={[{ url: M3U_SOURCES.movies, group: "Movies" }]} wcoTypes={['movie']} />} />

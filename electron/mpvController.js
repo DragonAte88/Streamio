@@ -164,6 +164,82 @@ class MpvController {
     return this.command(["observe_property", id, name]);
   }
 
+  getProperty(name) {
+    return this.command(["get_property", name]);
+  }
+
+  /**
+   * Real track data straight from the demuxer - subtitle, audio and video
+   * tracks actually present in what is currently playing. This is the only
+   * honest source for the subtitle and quality menus; anything else would be
+   * guessing at what a stream contains.
+   */
+  async getTracks() {
+    const list = (await this.getProperty("track-list")) || [];
+    return list.map((t) => ({
+      id: t.id,
+      type: t.type, // "video" | "audio" | "sub"
+      title: t.title || null,
+      lang: t.lang || null,
+      codec: t.codec || null,
+      selected: !!t.selected,
+      default: !!t.default,
+      external: !!t.external,
+      width: t["demux-w"] || null,
+      height: t["demux-h"] || null,
+      fps: t["demux-fps"] || null,
+      channels: t["demux-channel-count"] || null,
+      bitrate: t["demux-bitrate"] || null
+    }));
+  }
+
+  /** Currently decoded video parameters - resolution here is what is really on screen. */
+  async getVideoInfo() {
+    const [params, codec, hwdec, fps, drops] = await Promise.all([
+      this.getProperty("video-params").catch(() => null),
+      this.getProperty("video-codec").catch(() => null),
+      this.getProperty("hwdec-current").catch(() => null),
+      this.getProperty("estimated-vf-fps").catch(() => null),
+      this.getProperty("frame-drop-count").catch(() => null)
+    ]);
+    return {
+      width: params?.w || null,
+      height: params?.h || null,
+      pixelFormat: params?.pixelformat || null,
+      codec: codec || null,
+      hwdec: hwdec || null,
+      fps: fps || null,
+      droppedFrames: drops ?? null
+    };
+  }
+
+  setSubtitleTrack(id) {
+    // "no" disables subtitles entirely; any other value is a track id.
+    return this.command(["set_property", "sid", id === null ? "no" : id]);
+  }
+
+  addSubtitleFile(filePath) {
+    return this.command(["sub-add", filePath, "select"]);
+  }
+
+  setAudioTrack(id) {
+    return this.command(["set_property", "aid", id === null ? "no" : id]);
+  }
+
+  /**
+   * Switching quality on an HLS master playlist. mpv exposes the variant
+   * streams through ytdl/hls format selection; for a plain multi-variant m3u8
+   * the practical lever is capping height, which makes mpv pick the highest
+   * variant at or below that ceiling. `null` removes the cap.
+   */
+  setMaxHeight(height) {
+    return this.command(["set_property", "hls-bitrate", height === null ? "max" : "min"]).catch(() => {});
+  }
+
+  setVideoTrack(id) {
+    return this.command(["set_property", "vid", id === null ? "no" : id]);
+  }
+
   stop() {
     if (this.sock) {
       try {

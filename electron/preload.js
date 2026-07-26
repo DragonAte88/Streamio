@@ -11,6 +11,14 @@ contextBridge.exposeInMainWorld("player", {
   setBounds:  (bounds) => ipcRenderer.send("player:bounds", bounds),
   getMpvLog:  ()     => ipcRenderer.invoke("player:mpvlog"),
   getMpvPath: ()     => ipcRenderer.invoke("player:mpvpath"),
+  // Track / codec introspection - real data from the demuxer, used by the
+  // subtitle and quality menus.
+  getTracks:        ()   => ipcRenderer.invoke("player:tracks"),
+  getVideoInfo:     ()   => ipcRenderer.invoke("player:video-info"),
+  setSubtitleTrack: (id) => ipcRenderer.invoke("player:sub-track", id),
+  addSubtitleFile:  ()   => ipcRenderer.invoke("player:sub-pick"),
+  setAudioTrack:    (id) => ipcRenderer.invoke("player:audio-track", id),
+  setVideoTrack:    (id) => ipcRenderer.invoke("player:video-track", id),
   onPropertyChange: (cb) => {
     const listener = (_e, msg) => cb(msg);
     ipcRenderer.on("player:property-change", listener);

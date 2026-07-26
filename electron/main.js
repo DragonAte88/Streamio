@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const path = require("path");
 const fs   = require("fs");
 const { MpvController, MPV_PATH, MPV_LOG_PATH } = require("./mpvController");
@@ -332,6 +332,26 @@ app.whenReady().then(() => {
     if (alive(videoWindow)) videoWindow.hide();
     if (alive(controlsWindow)) controlsWindow.hide();
     return true;
+  });
+
+  ipcMain.handle("player:tracks", async () => (mpv ? mpv.getTracks() : []));
+  ipcMain.handle("player:video-info", async () => (mpv ? mpv.getVideoInfo() : null));
+  ipcMain.handle("player:sub-track", async (_e, id) => mpv && mpv.setSubtitleTrack(id));
+  ipcMain.handle("player:audio-track", async (_e, id) => mpv && mpv.setAudioTrack(id));
+  ipcMain.handle("player:video-track", async (_e, id) => mpv && mpv.setVideoTrack(id));
+
+  // Loading an external subtitle file needs a real OS picker; the renderer is
+  // sandboxed and never sees a filesystem path of its own.
+  ipcMain.handle("player:sub-pick", async () => {
+    if (!mpv) return null;
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: "Choose a subtitle file",
+      properties: ["openFile"],
+      filters: [{ name: "Subtitles", extensions: ["srt", "ass", "ssa", "sub", "vtt", "idx"] }]
+    });
+    if (canceled || !filePaths.length) return null;
+    await mpv.addSubtitleFile(filePaths[0]);
+    return filePaths[0];
   });
 
   ipcMain.on("player:bounds", (_e, bounds) => {
