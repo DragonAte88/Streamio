@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
-import { fetchArtwork } from "../lib/api";
+import { fetchArtwork, API_BASE } from "../lib/api";
 import {
   ANIME_SORTS,
   AnimeFilters,
@@ -14,6 +14,37 @@ import {
   WCO_TYPE_LABELS,
   applyAnimeFilters,
 } from "../lib/anime";
+
+// ─── Refresh system types ──────────────────────────────────────────────────────
+
+type RefreshStatus = "idle" | "checking" | "ok" | "error";
+
+interface SystemStatus {
+  label: string;
+  url: string;
+  status: RefreshStatus;
+  latency?: number;
+  detail?: string;
+}
+
+const FLEX_SYSTEMS: { label: string; url: string }[] = [
+  { label: "Flex-1 (Production API)", url: `${API_BASE}/health` },
+  { label: "Flex-3 (Staging API)",    url: "https://167-234-210-42.sslip.io/health" },
+  { label: "Flex-2 (Bot Server)",     url: "https://170-9-15-10.sslip.io/health" },
+];
+
+async function pingSystem(url: string): Promise<{ ok: boolean; latency: number; detail: string }> {
+  const start = Date.now();
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    const latency = Date.now() - start;
+    let detail = "";
+    try { const j = await res.json(); detail = j.status || j.message || ""; } catch {}
+    return { ok: res.ok, latency, detail: detail || (res.ok ? "online" : `HTTP ${res.status}`) };
+  } catch (e: any) {
+    return { ok: false, latency: Date.now() - start, detail: e?.message?.includes("timeout") ? "timed out" : "unreachable" };
+  }
+}
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
 
@@ -56,9 +87,23 @@ export default function Anime() {
   const [view, setView] = useState<ViewMode>("grid");
   const [shuffleSeed, setShuffleSeed] = useState(1);
 
-  // ── Load WCO lists (interleave so UI appears progressively) ──
+  // ── Refresh panel ──
+  const [showRefresh, setShowRefresh] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [systems, setSystems] = useState<SystemStatus[]>(
+    FLEX_SYSTEMS.map((s) => ({ ...s, status: "idle" as RefreshStatus }))
+  );
+  const [scraperStatus, setScraperStatus] = useState<RefreshStatus>("idle");
+  const [artworkStatus, setArtworkStatus] = useState<RefreshStatus>("idle");
+  const [lastRefreshAt, setLastRefreshAt] = useState<Date | null>(null);
+  const loadTrigger = useRef(0);
+
+  // ── Load WCO lists — re-runs when loadTrigger increments (i.e. on refresh) ──
   useEffect(() => {
     let cancelled = false;
+    setAllItems([]);
+    setLoadingTypes(new Set(["dub", "sub", "cartoon", "movie"]));
+    setLoading(true);
 
     async function loadType(key: "dub" | "sub" | "cartoon" | "movie") {
       try {
@@ -72,7 +117,6 @@ export default function Anime() {
           category: WCO_TYPE_LABELS[key],
         }));
         setAllItems((prev) => {
-          // Deduplicate by title across types
           const existing = new Set(prev.map((p) => p.title.toLowerCase()));
           const fresh = items.filter((it) => !existing.has(it.title.toLowerCase()));
           return [...prev, ...fresh];
@@ -92,13 +136,10 @@ export default function Anime() {
       }
     }
 
-    // Load all 4 types in parallel
     WCO_TYPES.forEach(({ wcoKey }) => loadType(wcoKey));
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadTrigger.current]);
 
   // Done loading when all 4 types resolved
   useEffect(() => {
@@ -115,6 +156,49 @@ export default function Anime() {
       return next;
     });
   }, []);
+
+  // ── Full Refresh: scraper + artwork cache + backends ──
+  const performRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setShowRefresh(true);
+
+    // 1. Reset all system statuses to "checking"
+    setSystems(FLEX_SYSTEMS.map((s) => ({ ...s, status: "checking" })));
+    setScraperStatus("checking");
+    setArtworkStatus("checking");
+
+    // 2. Ping all 3 Flex backends in parallel
+    const pingPromises = FLEX_SYSTEMS.map(async (sys, i) => {
+      const result = await pingSystem(sys.url);
+      setSystems((prev) => {
+        const next = [...prev];
+        next[i] = { ...next[i], status: result.ok ? "ok" : "error", latency: result.latency, detail: result.detail };
+        return next;
+      });
+    });
+
+    // 3. Reset WCO scraper (clears Cloudflare session + list cache)
+    const scraperPromise = window.wco.refresh()
+      .then(() => setScraperStatus("ok"))
+      .catch(() => setScraperStatus("error"));
+
+    // 4. Clear local artwork cache so cards re-fetch from backend
+    const artworkPromise = new Promise<void>((resolve) => {
+      setArtworkMap(new Map());
+      setArtworkStatus("ok");
+      resolve();
+    });
+
+    // Wait for everything
+    await Promise.all([...pingPromises, scraperPromise, artworkPromise]);
+
+    // 5. Trigger WCO re-load
+    loadTrigger.current += 1;
+
+    setLastRefreshAt(new Date());
+    setRefreshing(false);
+  };
 
   // ── My List — load from localStorage (offline) ──
   useEffect(() => {
@@ -178,13 +262,66 @@ export default function Anime() {
       >
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
           <span style={{ fontSize: 32 }}>🎌</span>
-          <div>
+          <div style={{ flex: 1 }}>
             <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800, letterSpacing: -0.5 }}>Anime & Cartoons</h1>
             <p style={{ color: "var(--text-dim)", margin: "4px 0 0", fontSize: 13 }}>
               On-demand catalog from WCO — dubbed anime, subbed anime, cartoons, and movies.
             </p>
           </div>
+          {/* Refresh button */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+            <button
+              onClick={performRefresh}
+              disabled={refreshing}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                padding: "9px 18px",
+                borderRadius: 8,
+                border: "1px solid rgba(99,102,241,0.4)",
+                background: refreshing ? "rgba(99,102,241,0.15)" : "rgba(99,102,241,0.1)",
+                color: refreshing ? "rgba(255,255,255,0.5)" : "var(--accent)",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: refreshing ? "not-allowed" : "pointer",
+                transition: "all 0.15s",
+                letterSpacing: 0.3,
+              }}
+              title="Refresh WCO catalog, artwork cache, and ping all backend servers"
+            >
+              <span style={{
+                display: "inline-block",
+                animation: refreshing ? "spin 1s linear infinite" : "none",
+                fontSize: 15,
+              }}>⟳</span>
+              {refreshing ? "Refreshing…" : "Refresh All"}
+            </button>
+            {lastRefreshAt && (
+              <div style={{ fontSize: 11, color: "var(--text-dim)", textAlign: "right" }}>
+                Last: {lastRefreshAt.toLocaleTimeString()}
+              </div>
+            )}
+            {(showRefresh) && (
+              <button
+                onClick={() => setShowRefresh((v) => !v)}
+                style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+              >
+                {showRefresh ? "▲ Hide status" : "▼ Show status"}
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Refresh status panel */}
+        {showRefresh && (
+          <RefreshPanel
+            systems={systems}
+            scraperStatus={scraperStatus}
+            artworkStatus={artworkStatus}
+            onClose={() => setShowRefresh(false)}
+          />
+        )}
 
         {/* Stats bar */}
         <div style={{ display: "flex", gap: 28, marginTop: 18, marginBottom: 20, flexWrap: "wrap" }}>
@@ -784,3 +921,148 @@ function LetterChip({
     </button>
   );
 }
+
+// ─── RefreshPanel ─────────────────────────────────────────────────────────────
+
+const STATUS_COLOR: Record<RefreshStatus, string> = {
+  idle:     "#3a3a4a",
+  checking: "#f59e0b",
+  ok:       "#10b981",
+  error:    "#ef4444",
+};
+
+const STATUS_ICON: Record<RefreshStatus, string> = {
+  idle:     "○",
+  checking: "◌",
+  ok:       "●",
+  error:    "✕",
+};
+
+function RefreshPanel({
+  systems,
+  scraperStatus,
+  artworkStatus,
+  onClose,
+}: {
+  systems: SystemStatus[];
+  scraperStatus: RefreshStatus;
+  artworkStatus: RefreshStatus;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      style={{
+        margin: "12px 0 0",
+        padding: "14px 18px",
+        background: "rgba(10,10,18,0.8)",
+        border: "1px solid rgba(99,102,241,0.2)",
+        borderRadius: 10,
+        backdropFilter: "blur(8px)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "var(--text-dim)" }}>
+          System Status
+        </div>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 16 }}>✕</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 8 }}>
+        {/* Flex backends */}
+        {systems.map((sys) => (
+          <StatusRow
+            key={sys.label}
+            label={sys.label}
+            status={sys.status}
+            detail={sys.latency != null && sys.status !== "idle" ? `${sys.detail} · ${sys.latency}ms` : sys.detail}
+          />
+        ))}
+
+        {/* WCO Scraper */}
+        <StatusRow
+          label="WCO Scraper (cache + browser)"
+          status={scraperStatus}
+          detail={
+            scraperStatus === "ok" ? "Cache cleared, window restarted" :
+            scraperStatus === "checking" ? "Reinitializing…" :
+            scraperStatus === "error" ? "Failed to reset" : undefined
+          }
+        />
+
+        {/* Artwork Cache */}
+        <StatusRow
+          label="Artwork Cache (local)"
+          status={artworkStatus}
+          detail={
+            artworkStatus === "ok" ? "Cleared — posters will reload on scroll" :
+            artworkStatus === "checking" ? "Clearing…" : undefined
+          }
+        />
+
+        {/* WCO Lists */}
+        <StatusRow
+          label="WCO Catalog (dub · sub · cartoon · movie)"
+          status={artworkStatus === "ok" ? "checking" : "idle"}
+          detail="Re-fetching from WCO…"
+        />
+      </div>
+
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @keyframes statusPulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function StatusRow({
+  label,
+  status,
+  detail,
+}: {
+  label: string;
+  status: RefreshStatus;
+  detail?: string;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 12px",
+        borderRadius: 7,
+        background: "rgba(255,255,255,0.03)",
+        border: `1px solid ${status === "ok" ? "rgba(16,185,129,0.2)" : status === "error" ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.06)"}`,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 14,
+          color: STATUS_COLOR[status],
+          animation: status === "checking" ? "statusPulse 0.8s ease-in-out infinite" : "none",
+          flexShrink: 0,
+        }}
+      >
+        {STATUS_ICON[status]}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#e4e4f0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {label}
+        </div>
+        {detail && (
+          <div style={{ fontSize: 11, color: status === "error" ? "#ef4444" : "var(--text-dim)", marginTop: 1 }}>
+            {detail}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+

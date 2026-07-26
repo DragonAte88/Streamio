@@ -246,6 +246,7 @@ app.whenReady().then(() => {
   ipcMain.handle("wco:episodes", (_e, url) => wcoScraper.getEpisodes(url));
   ipcMain.handle("wco:extract", (_e, url) => wcoScraper.extractVideo(url));
   ipcMain.handle("wco:list", (_e, type) => wcoScraper.getList(type));
+  ipcMain.handle("wco:refresh", () => { wcoScraper.refresh(); return { ok: true, ts: Date.now() }; });
 
   ipcMain.handle("discord:watching", (_e, channelName) => {
     discordRpc.setWatching(channelName);

@@ -49,6 +49,7 @@ declare global {
       getEpisodes: (url: string) => Promise<{title: string, url: string}[]>;
       extractVideo: (url: string) => Promise<string | null>;
       getList: (type: string) => Promise<{title: string, url: string}[]>;
+      refresh: () => Promise<{ ok: boolean; ts: number }>;
     };
   }
 }

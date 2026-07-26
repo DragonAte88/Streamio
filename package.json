@@ -1,7 +1,7 @@
 {
   "name": "streamio-desktop",
   "productName": "Streamio",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "description": "Windows media player: IPTV/M3U8 live TV + VOD, mpv-powered playback",
   "main": "electron/main.js",
   "type": "commonjs",

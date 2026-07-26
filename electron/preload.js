@@ -76,5 +76,6 @@ contextBridge.exposeInMainWorld("wco", {
   search: (query, filter) => ipcRenderer.invoke("wco:search", query, filter),
   getEpisodes: (url) => ipcRenderer.invoke("wco:episodes", url),
   extractVideo: (url) => ipcRenderer.invoke("wco:extract", url),
-  getList: (type) => ipcRenderer.invoke("wco:list", type)
+  getList: (type) => ipcRenderer.invoke("wco:list", type),
+  refresh: () => ipcRenderer.invoke("wco:refresh")
 });

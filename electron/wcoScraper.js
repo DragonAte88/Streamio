@@ -394,11 +394,32 @@ function destroy() {
   scraperWin = null;
 }
 
+function clearCache() {
+  cache.cartoon = null;
+  cache.dub = null;
+  cache.sub = null;
+  cache.movie = null;
+  console.log("[wcoScraper] Cache cleared.");
+}
+
+/**
+ * Full refresh: destroy the hidden window (clearing Cloudflare cookies + session)
+ * and wipe the list cache so everything re-fetches fresh.
+ */
+function refresh() {
+  clearCache();
+  destroy();
+  init();
+  console.log("[wcoScraper] Full refresh — window restarted, cache cleared.");
+}
+
 module.exports = {
   init,
   search,
   getEpisodes,
   extractVideo,
   getList,
+  clearCache,
+  refresh,
   destroy
 };
