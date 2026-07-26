@@ -353,7 +353,7 @@ async function search(query, filterType = "all") {
 
 /**
  * Direct WatchNixtoons2 HTTP episode parser.
- * Extracts episode links from HTML source using WatchNixtoons2 regex boundaries.
+ * Supports both legacy catlist-listview and new WCO dark-episode-box/episodeList HTML layouts.
  */
 async function fetchEpisodesDirect(showUrl) {
   try {
@@ -368,27 +368,36 @@ async function fetchEpisodesDirect(showUrl) {
     if (!res.ok) return null;
     const html = await res.text();
 
-    // WatchNixtoons2 catlist-listview section boundary extraction
     let scopeHtml = html;
-    const catIdx = html.indexOf('id="catlist-listview"') !== -1 ? html.indexOf('id="catlist-listview"') : html.indexOf('catlist-listview');
-    if (catIdx !== -1) {
-      scopeHtml = html.slice(catIdx);
-      const endIdx = scopeHtml.indexOf('</div>\n</div>') !== -1 ? scopeHtml.indexOf('</div>\n</div>') : scopeHtml.indexOf('</section>');
+    let startIdx = -1;
+    for (const key of ['id="episodeList"', 'class="dark-episode-box"', 'id="episodes"', 'id="catlist-listview"', 'catlist-listview']) {
+      const idx = html.indexOf(key);
+      if (idx !== -1) { startIdx = idx; break; }
+    }
+
+    if (startIdx !== -1) {
+      scopeHtml = html.slice(startIdx);
+      const endIdx = scopeHtml.indexOf('<!--/catlist-->') !== -1 ? scopeHtml.indexOf('<!--/catlist-->') : scopeHtml.indexOf('</section>');
       if (endIdx !== -1) scopeHtml = scopeHtml.slice(0, endIdx);
     }
 
     const matches = [];
-    const linkRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi;
+
+    // Robust Regex: Handles nested <span>/<div> tags inside <a ... href="...">...</a>
+    const tagRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
     let match;
 
-    while ((match = linkRegex.exec(scopeHtml)) !== null) {
+    while ((match = tagRegex.exec(scopeHtml)) !== null) {
       const linkHref = match[1];
-      const linkTitle = match[2].trim();
+      const innerHtml = match[2];
 
-      if (linkTitle.length > 0 && linkHref && !linkHref.includes('#') && !linkHref.includes('/category/')) {
-        const norm = normalizeUrl(linkHref) || linkHref;
-        if (norm && (norm.includes('-episode-') || norm.includes('/episode/') || norm.includes('wcostream') || norm.includes('watchnixtoons'))) {
-          matches.push({ title: linkTitle, url: norm });
+      // Strip inner tags to get raw title text (e.g. <span>Title</span> -> Title)
+      const rawTitle = innerHtml.replace(/<[^>]+>/g, '').trim();
+
+      if (rawTitle.length > 0 && linkHref && !linkHref.includes('#') && !linkHref.includes('/category/')) {
+        const norm = normalizeUrl(linkHref) || (linkHref.startsWith('/') ? BASE_URL + linkHref : linkHref);
+        if (norm && (norm.includes('-episode-') || norm.includes('/episode/') || norm.includes('-season-') || norm.includes('wcostream') || norm.includes('wco.tv') || norm.includes('watchnixtoons'))) {
+          matches.push({ title: rawTitle, url: norm });
         }
       }
     }
@@ -445,7 +454,7 @@ async function getEpisodes(showUrl) {
 
     const eps = await pollUntil(`
       (function() {
-        const SELECTOR_COMBO = '#catlist-listview a, .cat-eps a, #episode_related a, .episodes-area a, .eplist a, .episode-list a, ul.listing a, .list-episode a, div[id*="catlist"] a, div[class*="eps"] a, div[class*="episode"] a, a[href*="-episode-"], a[href*="/episode/"]';
+        const SELECTOR_COMBO = '#episodeList a, a.dark-episode-item, .dark-episode-box a, #episodes a, #catlist-listview a, .cat-eps a, #episode_related a, .episodes-area a, .eplist a, .episode-list a, ul.listing a, .list-episode a, div[id*="catlist"] a, div[class*="eps"] a, div[class*="episode"] a, a[href*="-episode-"], a[href*="/episode/"]';
 
         const els = Array.from(document.querySelectorAll(SELECTOR_COMBO));
         if (els.length === 0) return null;
@@ -454,12 +463,12 @@ async function getEpisodes(showUrl) {
         const items = [];
 
         for (const a of els) {
-          const title = (a.textContent || '').trim();
+          const title = (a.querySelector('span')?.textContent || a.textContent || '').trim();
           const href = a.href || a.getAttribute('href') || '';
           if (!title || !href || href.includes('#') || href.includes('/category/')) continue;
 
-          const norm = href.startsWith('/') ? 'https://www.wcostream.tv' + href : href;
-          if (norm && !seen.has(norm) && (norm.includes('wcostream') || norm.includes('watchnixtoons') || norm.includes('wcoforever') || norm.includes('-episode-') || norm.includes('/episode/'))) {
+          const norm = href.startsWith('/') ? 'https://www.wco.tv' + href : href;
+          if (norm && !seen.has(norm)) {
             seen.add(norm);
             items.push({ title, url: norm });
           }

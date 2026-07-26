@@ -2,6 +2,16 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # env_file is what makes the secrets filename non-load-bearing. The
+    # ${VAR} interpolation below is resolved by Compose from a file named
+    # exactly `.env`, NOT from env_file - so on a machine where only
+    # secrets.env exists, every ${VAR} silently became an empty string.
+    # That took down Flex-1 and later Flex-3 independently: Postgres got an
+    # empty password and refused to start, and the API then failed DNS on
+    # the postgres host. Listing secrets.env here means the values arrive
+    # even when no .env symlink is present.
+    env_file:
+      - secrets.env
     environment:
       POSTGRES_USER: streamio
       POSTGRES_PASSWORD: ${PGPASSWORD}
@@ -9,11 +19,25 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks: [internal]
+    # depends_on alone only waits for the container to START, not to be ready
+    # to accept connections. Without this healthcheck the API raced Postgres
+    # on every boot, failed its migration with ECONNREFUSED, and Caddy served
+    # 502 until it retried.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streamio -d streamio"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   api:
     build: ./api
     restart: unless-stopped
-    depends_on: [postgres]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - secrets.env
     environment:
       PGHOST: postgres
       PGPORT: 5432
@@ -33,6 +57,12 @@ services:
     volumes:
       - uploads:/app/uploads
     networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 8s
+      retries: 4
+      start_period: 20s
 
 networks:
   internal:
