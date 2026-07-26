@@ -468,7 +468,25 @@ function extractStreamFromHTML(html, baseUrl = BASE_URL) {
       return mediaMatch[1];
     }
 
-    // 4. Hidden iframe src matching
+    // 4. WatchNixtoons2 exact iframe regex patterns
+    const vjsMatch = html.match(/<iframe id="[^"]+" class="vjs_iframe" rel="nofollow" src="([^"]+)"/i);
+    if (vjsMatch) return normalizeUrl(vjsMatch[1]) || vjsMatch[1];
+
+    const uploadsMatch = html.match(/<iframe id="[^"]*uploads[^"]*" src="([^"]+)"/i);
+    if (uploadsMatch) return normalizeUrl(uploadsMatch[1]) || uploadsMatch[1];
+
+    const cizgiMatch = html.match(/<iframe\s*rel="nofollow"\s*id="cizgi-js-[0-9]+" src="([^"]+)"/i);
+    if (cizgiMatch) return normalizeUrl(cizgiMatch[1]) || cizgiMatch[1];
+
+    // 5. WatchNixtoons2 episode description / myFunction embed decoder
+    const descIdx = html.indexOf('class="episode-descp"') !== -1 ? html.indexOf('class="episode-descp"') : html.indexOf('onclick="myFunction"');
+    if (descIdx > 0) {
+      const subContent = html.slice(descIdx);
+      const srcMatch = subContent.match(/src="([^"]+)"/);
+      if (srcMatch) return normalizeUrl(srcMatch[1]) || srcMatch[1];
+    }
+
+    // 6. Generic hidden iframe src matching
     const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
     if (iframeMatch && (iframeMatch[1].includes('getvid') || iframeMatch[1].includes('embed') || iframeMatch[1].includes('inc/'))) {
       const frameUrl = iframeMatch[1];
@@ -481,11 +499,67 @@ function extractStreamFromHTML(html, baseUrl = BASE_URL) {
   return null;
 }
 
+/**
+ * Direct WatchNixtoons2 AJAX /inc/embed/getvidlink stream resolver.
+ * Fetches JSON payload directly from WCO backend for ultra-fast response.
+ */
+async function resolveWatchNixtoons2GetVid(embedUrl) {
+  try {
+    const fullEmbedUrl = normalizeUrl(embedUrl) || embedUrl;
+    const res = await fetch(fullEmbedUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": BASE_URL + "/",
+      }
+    });
+
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    const match = html.match(/"(\/inc\/embed\/getvidlink[^"]+)"/i);
+    if (!match) return null;
+
+    const apiPath = match[1];
+    const apiUrl = BASE_URL + apiPath;
+
+    const apiRes = await fetch(apiUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": fullEmbedUrl,
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "*/*",
+      }
+    });
+
+    if (!apiRes.ok) return null;
+    const data = await apiRes.json();
+
+    const token = data.fhd || data.hd || data.enc;
+    if (!token) return null;
+
+    const serverUrl = data.server ? `${data.server}/getvid?evid=${token}` : null;
+    const cdnUrl = data.cdn ? `${data.cdn}/getvid?evid=${token}` : null;
+
+    return serverUrl || cdnUrl;
+  } catch (err) {
+    console.warn("[wcoExtractor] WatchNixtoons2 getvidlink AJAX failed:", err.message);
+    return null;
+  }
+}
+
 async function extractVideo(episodeUrl) {
+  const url = normalizeUrl(episodeUrl) || episodeUrl;
+  console.log("[wcoExtractor] Extracting stream from:", url);
+
+  // Phase 0: WatchNixtoons2 Fast-Path Direct AJAX Resolution (Sub-second execution)
+  const fastStream = await resolveWatchNixtoons2GetVid(url).catch(() => null);
+  if (fastStream) {
+    console.log("[wcoExtractor] WatchNixtoons2 Fast-Path resolved stream instantly:", fastStream.slice(0, 150));
+    return fastStream;
+  }
+
   return new Promise(async (resolve) => {
     createExtractorWin();
-    const url = normalizeUrl(episodeUrl) || episodeUrl;
-    console.log("[wcoExtractor] Extracting stream from:", url);
 
     let resolved = false;
 
