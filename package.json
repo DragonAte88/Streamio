@@ -51,7 +51,12 @@
     "nsis": {
       "artifactName": "Streamio-Setup-${version}.exe",
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "allowElevation": true,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true
     },
     "publish": {
       "provider": "github",
