@@ -6,13 +6,46 @@ export interface PlaybackItem extends Channel {
   title?: string;
 }
 
+/** Docked picture-in-picture vs taking over the content area. */
+export type PlayerMode = "fullscreen" | "mini";
+
+/**
+ * Which player experience this item gets.
+ * "live"  - continuous IPTV/M3U8: no seeking, LIVE badge, defaults to the
+ *           docked mini player so the guide stays usable while watching.
+ * "vod"   - finite media: seek bar, subtitle/quality menus, opens fullscreen.
+ */
+export type PlayerKind = "live" | "vod";
+
+export interface PlayOptions {
+  kind?: PlayerKind;
+  mode?: PlayerMode;
+}
+
 interface PlaybackState {
   playing: PlaybackItem | null;
   queue: PlaybackItem[];
-  play: (item: PlaybackItem, queue?: PlaybackItem[]) => void;
+  mode: PlayerMode;
+  kind: PlayerKind;
+  setMode: (m: PlayerMode) => void;
+  toggleMode: () => void;
+  play: (item: PlaybackItem, queue?: PlaybackItem[], opts?: PlayOptions) => void;
   playNext: () => void;
   close: () => void;
   isExtractingNext: boolean;
+}
+
+/**
+ * Infer live vs VOD when the caller does not say. A raw .m3u8/.m3u, or a
+ * catalog entry with no duration, is live; anything else is treated as VOD.
+ * Callers that know better (Live TV guide, episode lists) pass `kind`
+ * explicitly rather than relying on this.
+ */
+function inferKind(item: PlaybackItem): PlayerKind {
+  const url = (item.url || "").toLowerCase();
+  if (url.includes(".m3u8") || url.includes(".m3u") || url.includes("/hls")) return "live";
+  if (item.wcoUrl) return "vod";
+  return "live";
 }
 
 const PlaybackContext = createContext<PlaybackState | null>(null);
@@ -21,8 +54,15 @@ export function PlaybackProvider({ children }: { children: React.ReactNode }) {
   const [playing, setPlaying] = useState<PlaybackItem | null>(null);
   const [queue, setQueue] = useState<PlaybackItem[]>([]);
   const [isExtractingNext, setIsExtractingNext] = useState(false);
+  const [mode, setMode] = useState<PlayerMode>("fullscreen");
+  const [kind, setKind] = useState<PlayerKind>("live");
 
-  const play = (item: PlaybackItem, newQueue?: PlaybackItem[]) => {
+  const play = (item: PlaybackItem, newQueue?: PlaybackItem[], opts?: PlayOptions) => {
+    const resolvedKind = opts?.kind ?? inferKind(item);
+    setKind(resolvedKind);
+    // Live defaults to the docked player so the guide stays browsable; VOD
+    // takes over the content area. An explicit mode always wins.
+    setMode(opts?.mode ?? (resolvedKind === "live" ? "mini" : "fullscreen"));
     setPlaying(item);
     if (newQueue) setQueue(newQueue);
   };
@@ -79,7 +119,20 @@ export function PlaybackProvider({ children }: { children: React.ReactNode }) {
   }, [queue]); // Re-bind when queue changes to have latest playNext closure
 
   return (
-    <PlaybackContext.Provider value={{ playing, queue, play, playNext, close: () => setPlaying(null), isExtractingNext }}>
+    <PlaybackContext.Provider
+      value={{
+        playing,
+        queue,
+        mode,
+        kind,
+        setMode,
+        toggleMode: () => setMode((m) => (m === "mini" ? "fullscreen" : "mini")),
+        play,
+        playNext,
+        close: () => setPlaying(null),
+        isExtractingNext
+      }}
+    >
       {children}
     </PlaybackContext.Provider>
   );

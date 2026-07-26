@@ -34,6 +34,9 @@ export default function LiveTVGuide() {
   const { channels, loading: catalogLoading } = useCatalog();
   const { play } = usePlayback();
 
+  // Live channels open docked, so the guide stays usable while watching.
+  const playLive = (ch: LiveChannel) => play(ch, undefined, { kind: "live", mode: "mini" });
+
   const [view, setView] = useState<ViewMode>("list");
   const [meta, setMeta] = useState<{ ch: any[]; st: any[]; gu: any[] } | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
@@ -228,7 +231,7 @@ export default function LiveTVGuide() {
             <ListView
               channels={filtered.map(withProgrammes)}
               onOpen={openDetail}
-              onPlay={play}
+              onPlay={playLive}
               onNeedEpg={loadEpg}
               selectedId={selected?.id}
             />
@@ -239,7 +242,7 @@ export default function LiveTVGuide() {
               start={gridStart}
               now={now}
               onOpen={openDetail}
-              onPlay={play}
+              onPlay={playLive}
               onNeedEpg={loadEpg}
             />
           )}
@@ -250,7 +253,7 @@ export default function LiveTVGuide() {
             channel={selected}
             loadingEpg={!!selected.meta && epgLoading.has(selected.meta.id)}
             onClose={() => setSelected(null)}
-            onPlay={() => play(selected)}
+            onPlay={() => playLive(selected)}
           />
         )}
       </div>

@@ -204,6 +204,68 @@ html, body, #root {
 
 /* Player */
 .player-view { position: fixed; inset: 0; background: #000; display: flex; flex-direction: column; z-index: 10; }
+
+/* Docked mini player: a floating shell pinned bottom-right. The header strip is
+   rendered here in the main window, deliberately OUTSIDE the rect reported to
+   mpv - mpv's native window paints over anything inside its bounds, so controls
+   drawn there would be invisible. */
+.player-mini {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 440px;
+  z-index: 20;
+  background: #0d0d13;
+  border: 1px solid #2a2a35;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+}
+.player-mini-header {
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  background: #14141b;
+  border-bottom: 1px solid #22222c;
+  font-size: 12px;
+  cursor: default;
+}
+.player-mini-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.player-mini-video { height: 248px; background: #000; position: relative; }
+.player-mini-btn {
+  background: none;
+  border: none;
+  color: #cfcfd8;
+  cursor: pointer;
+  font-size: 13px;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+.player-mini-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.live-badge {
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
 .main-content.player-open { overflow: hidden; }
 .video-area { flex: 1; position: relative; }
 .player-topbar {

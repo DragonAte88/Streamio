@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import type { Channel } from "../lib/playlist";
 import { useSettings } from "../lib/SettingsContext";
+import { usePlayback } from "../lib/PlaybackContext";
 
 const ROUTE_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/home",     label: "Home" },
@@ -22,6 +23,7 @@ function labelForPath(pathname: string): string {
 
 export default function PlayerView({ channel, onClose }: { channel: Channel; onClose: () => void }) {
   const { settings } = useSettings();
+  const { mode, kind, toggleMode } = usePlayback();
   const location = useLocation();
   const areaRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +98,9 @@ export default function PlayerView({ channel, onClose }: { channel: Channel; onC
     };
   }, [channel.url]); // Re-run when the stream URL changes (next episode)
 
-  // Report the video div bounds to main process so MPV knows where to paint
+  // Report the video div bounds to main process so MPV knows where to paint.
+  // Re-runs on mode change: switching between docked and fullscreen moves the
+  // element, and mpv only learns about it from this report.
   useEffect(() => {
     const el = areaRef.current;
     if (!el) return;
@@ -114,16 +118,18 @@ export default function PlayerView({ channel, onClose }: { channel: Channel; onC
     const ro = new ResizeObserver(report);
     ro.observe(el);
     window.addEventListener("scroll", report, true);
+    window.addEventListener("resize", report);
 
     return () => {
       ro.disconnect();
       window.removeEventListener("scroll", report, true);
+      window.removeEventListener("resize", report);
     };
-  }, []);
+  }, [mode]);
 
-  return (
-    <div className="player-view" ref={areaRef}>
-      {/* Status (shown briefly before MPV takes over) */}
+  // Overlays (spinner / error) are shared by both shells.
+  const overlays = (
+    <>
       {!error && status && (
         <div style={{
           position: "absolute", inset: 0,
@@ -137,7 +143,6 @@ export default function PlayerView({ channel, onClose }: { channel: Channel; onC
         </div>
       )}
 
-      {/* Error overlay */}
       {error && (
         <div style={{
           position: "absolute", inset: 0,
@@ -148,7 +153,7 @@ export default function PlayerView({ channel, onClose }: { channel: Channel; onC
         }}>
           <div style={{ fontSize: 28, marginBottom: 14 }}>⚠️</div>
           <div style={{
-            color: "#ef4444", fontSize: 14, fontWeight: 600,
+            color: "#ef4444", fontSize: 13, fontWeight: 600,
             maxWidth: 480, lineHeight: 1.7, whiteSpace: "pre-line",
           }}>
             {error}
@@ -165,6 +170,30 @@ export default function PlayerView({ channel, onClose }: { channel: Channel; onC
           </button>
         </div>
       )}
+    </>
+  );
+
+  // Docked player. The header sits above the reported video rect on purpose:
+  // anything drawn inside those bounds would be painted over by mpv.
+  if (mode === "mini") {
+    return (
+      <div className="player-mini">
+        <div className="player-mini-header">
+          {kind === "live" && <span className="live-badge">LIVE</span>}
+          <span className="player-mini-title" title={channel.name}>{channel.name}</span>
+          <button className="player-mini-btn" title="Expand" onClick={toggleMode}>⛶</button>
+          <button className="player-mini-btn" title="Close" onClick={onClose}>✕</button>
+        </div>
+        <div className="player-mini-video" ref={areaRef}>
+          {overlays}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="player-view" ref={areaRef}>
+      {overlays}
     </div>
   );
 }
