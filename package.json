@@ -43,6 +43,9 @@
       "electron/**",
       "package.json"
     ],
+    "directories": {
+      "output": "release"
+    },
     "win": {
       "target": "nsis",
       "signAndEditExecutable": false,
